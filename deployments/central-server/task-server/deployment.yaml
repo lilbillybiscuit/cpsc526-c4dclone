@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: task-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: task-server
+  template:
+    metadata:
+      labels:
+        app: task-server
+    spec:
+      containers:
+      - name: task-server
+        image: task-server:latest
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: task-server
+spec:
+  selector:
+    app: task-server
+  ports:
+  - port: 8080
+    targetPort: 8080
+  type: ClusterIP

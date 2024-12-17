@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: central-mvcc
+spec:
+  serviceName: central-mvcc
+  replicas: 3
+  selector:
+    matchLabels:
+      app: central-mvcc
+  template:
+    metadata:
+      labels:
+        app: central-mvcc
+    spec:
+      containers:
+      - name: mvcc
+        image: postgres:13
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mvcc-secrets
+              key: postgres-password
+        volumeMounts:
+        - name: mvcc-storage
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+  volumeClaimTemplates:
+  - metadata:
+      name: mvcc-storage
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: central-mvcc
+spec:
+  selector:
+    app: central-mvcc
+  ports:
+  - port: 5432
+    targetPort: 5432
+  clusterIP: None

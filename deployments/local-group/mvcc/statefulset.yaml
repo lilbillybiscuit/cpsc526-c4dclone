@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: local-mvcc
+spec:
+  serviceName: local-mvcc
+  replicas: 2
+  selector:
+    matchLabels:
+      app: local-mvcc
+  template:
+    metadata:
+      labels:
+        app: local-mvcc
+    spec:
+      containers:
+      - name: mvcc
+        image: postgres:13
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: local-mvcc-secrets
+              key: postgres-password
+        volumeMounts:
+        - name: mvcc-storage
+          mountPath: /var/lib/postgresql/data
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+  volumeClaimTemplates:
+  - metadata:
+      name: mvcc-storage
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: local-mvcc
+spec:
+  selector:
+    app: local-mvcc
+  ports:
+  - port: 5432
+    targetPort: 5432
+  clusterIP: None

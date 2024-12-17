@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compute-node
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: compute-node
+  template:
+    metadata:
+      labels:
+        app: compute-node
+    spec:
+      containers:
+      - name: compute-engine
+        image: compute-engine:latest
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: shared-data
+          mountPath: /data
+        
+      - name: c4d-agent
+        image: c4d-agent:latest
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+      - name: failure-agent
+        image: failure-agent:latest
+        securityContext:
+          privileged: true  # Required for network manipulation
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        
+      - name: storage-engine
+        image: storage-engine:latest
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: shared-data
+          mountPath: /data
+      
+      volumes:
+      - name: shared-data
+        emptyDir: {}
