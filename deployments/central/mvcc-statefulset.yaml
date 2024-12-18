@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: central-mvcc
+  namespace: c4d-system
+spec:
+  serviceName: central-mvcc
+  replicas: 3
+  selector:
+    matchLabels:
+      app: central-mvcc
+  template:
+    metadata:
+      labels:
+        app: central-mvcc
+    spec:
+      containers:
+      - name: mvcc
+        image: mvcc:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8000

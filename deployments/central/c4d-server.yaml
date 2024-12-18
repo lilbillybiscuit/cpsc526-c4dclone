@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: c4d-server
+  namespace: c4d-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: c4d-server
+  template:
+    metadata:
+      labels:
+        app: c4d-server
+    spec:
+      containers:
+      - name: c4d-server
+        image: c4d-server:latest
+        imagePullPolicy: Never  # Use local image
+        ports:
+        - containerPort: 8000

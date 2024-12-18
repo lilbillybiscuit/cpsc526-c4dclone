@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: compute-node
+  namespace: compute-nodes
+spec:
+  serviceName: compute-node
+  replicas: 2
+  selector:
+    matchLabels:
+      app: compute-node
+  template:
+    metadata:
+      labels:
+        app: compute-node
+    spec:
+      containers:
+      - name: compute
+        image: compute-node:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8000

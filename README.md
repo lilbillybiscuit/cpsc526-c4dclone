@@ -1,38 +1,20 @@
-# Distributed System Research Project
+# C4D Implementation
 
-This project implements a distributed system for research purposes, focusing on failure detection in machine learning models.
+This is an implementation of the C4D (Communication-Driven) approach for distributed training.
 
 ## Structure
-- `deployments/`: Kubernetes manifests
-- `src/`: Source code for all components
-- `scripts/`: Automation scripts
-- `monitoring/`: Monitoring configurations
+- `configs/`: Configuration files
+- `deployments/`: Kubernetes deployment manifests
+- `src/`: Source code
+  - `c4d/`: C4D server and agent implementation
+  - `compute/`: Compute node implementation
+  - `failure/`: Failure injection system
+  - `mvcc/`: MVCC implementation
+- `tests/`: Unit and integration tests
 
-## Quick Start
+## Setup
+1. Run `scripts/setup-cluster.sh` to set up the Kubernetes cluster
+2. Run `scripts/deploy.sh` to deploy the system
 
-1. Build all components:
-```
-make build-all
-```
-
-2. Deploy central services:
-```
-make deploy-central
-```
-
-3. Deploy a local group:
-```
-make deploy-local-group GROUP_NUM=1
-```
-
-4. Run failure scenarios:
-```
-make test-failure
-```
-
-## Components
-- Compute Engine: Main processing unit
-- C4D Agent: Failure detection
-- Failure Agent: Failure simulation
-- Storage Engine: Data persistence
-- Central Servers: Task distribution and coordination
+## Usage
+See documentation for detailed usage instructions.

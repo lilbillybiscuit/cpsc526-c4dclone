@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: training-config
+data:
+  config.yaml: |
+    training:
+      batch_size: 8
+      learning_rate: 3e-4
+      max_iterations: 1000
+      model:
+        n_layer: 4
+        n_head: 4
+        n_embd: 128

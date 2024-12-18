@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: monitoring-config
+data:
+  config.yaml: |
+    monitoring:
+      interval: 5
+      metrics:
+        - cpu_usage
+        - memory_usage
+        - network_latency

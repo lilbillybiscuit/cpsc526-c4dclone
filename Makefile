@@ -1,6 +1,5 @@
 # Variables
 KUBECTL = kubectl
-KUSTOMIZE = kustomize
 DOCKER = docker
 NAMESPACE = distributed-system
 
@@ -16,6 +15,15 @@ check-cluster:
 		echo "Error: Cannot connect to Kubernetes cluster. Please check your kubeconfig and cluster status."; \
 		exit 1; \
 	fi
+
+# Create all required namespaces
+.PHONY: create-namespaces
+create-namespaces: check-cluster
+	@echo "Creating namespaces..."
+	$(KUBECTL) create namespace $(NAMESPACE) --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) create namespace central-services --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) label namespace central-services name=central-services --overwrite
+	$(KUBECTL) label namespace $(NAMESPACE) name=$(NAMESPACE) --overwrite
 
 # Build targets
 .PHONY: build-all
@@ -34,20 +42,14 @@ build-failure:
 	$(DOCKER) build -t failure-agent:$(FAILURE_AGENT_TAG) src/failure-agent
 
 # Deployment targets
-.PHONY: deploy-namespace
-deploy-namespace: check-cluster
-	@echo "Creating central-services namespace..."
-	$(KUBECTL) create namespace central-services --dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) label namespace central-services name=central-services --overwrite
-
 .PHONY: deploy-secrets
-deploy-secrets: check-cluster
+deploy-secrets: check-cluster create-namespaces
 	@echo "Deploying secrets..."
 	$(KUBECTL) apply -f deployments/central-server/mvcc/secrets.yaml -n central-services
 	$(KUBECTL) apply -f deployments/local-group/mvcc/secrets.yaml -n $(NAMESPACE)
 
 .PHONY: deploy-central-services
-deploy-central-services: check-cluster deploy-namespace deploy-secrets
+deploy-central-services: check-cluster create-namespaces deploy-secrets
 	@echo "Deploying central services..."
 	$(KUBECTL) apply -f deployments/central-server/task-server -n central-services
 	$(KUBECTL) apply -f deployments/central-server/c4d-server -n central-services
@@ -55,7 +57,7 @@ deploy-central-services: check-cluster deploy-namespace deploy-secrets
 	$(KUBECTL) apply -f deployments/central-server/mvcc -n central-services
 
 .PHONY: deploy-local-group
-deploy-local-group: check-cluster
+deploy-local-group: check-cluster create-namespaces
 	@if [ -z "$(GROUP_NUM)" ]; then \
 		echo "Error: GROUP_NUM is required. Usage: make deploy-local-group GROUP_NUM=1"; \
 		exit 1; \
@@ -75,6 +77,7 @@ test-failure: check-cluster
 # Cleanup targets
 .PHONY: cleanup
 cleanup: check-cluster
+	$(KUBECTL) delete namespace $(NAMESPACE) --ignore-not-found
 	$(KUBECTL) delete namespace central-services --ignore-not-found
 	$(KUBECTL) get namespaces -o name | grep "^namespace/local-group-" | xargs -r $(KUBECTL) delete
 
@@ -96,3 +99,19 @@ cluster-status:
 		echo "\nTry running: kubectl cluster-info"; \
 		exit 1; \
 	fi
+
+# Show system status
+.PHONY: status
+status: check-cluster
+	@echo "System Status:"
+	@echo "\nNamespaces:"
+	$(KUBECTL) get namespaces
+	@echo "\nCentral Services (namespace: central-services):"
+	$(KUBECTL) get all -n central-services
+	@echo "\nDistributed System (namespace: $(NAMESPACE)):"
+	$(KUBECTL) get all -n $(NAMESPACE)
+	@echo "\nLocal Groups:"
+	@for ns in $$($(KUBECTL) get namespaces -o name | grep "^namespace/local-group-"); do \
+		echo "\n$${ns#namespace/}:"; \
+		$(KUBECTL) get all -n $${ns#namespace/}; \
+	done

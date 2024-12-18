@@ -1,0 +1,21 @@
+# tests the bandwidth between two containers in the same pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bandwidth-test
+spec:
+  containers:
+  - name: iperf-server
+    image: networkstatic/iperf3
+    command: ["iperf3", "-s"]
+    ports:
+    - containerPort: 5201
+  - name: iperf-client
+    image: networkstatic/iperf3
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      # Wait for server to be ready
+      sleep 5
+      # Run bandwidth test
+      iperf3 -c localhost -t 30 -i 1
