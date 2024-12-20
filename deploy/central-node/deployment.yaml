@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: central-node
+  namespace: central-services
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: central-node
+  template:
+    metadata:
+      labels:
+        app: central-node
+    spec:
+      containers:
+        # Task distribution server
+        - name: task-distributor
+          image: task-distributor:latest
+          ports:
+            - containerPort: 8090
+          env:
+            - name: C4D_SERVER_URL
+              value: http://c4d-server:8091
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+
+        # C4D server
+        - name: c4d-server
+          image: c4d-server:latest
+          ports:
+            - containerPort: 8091
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+
+        # Failure control server
+        - name: failure-server
+          image: failure-server:latest
+          ports:
+            - containerPort: 8092
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "250m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+
+        # Central MVCC cluster
+        - name: central-mvcc
+          image: mvcc:latest
+          ports:
+            - containerPort: 8093
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "500m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"

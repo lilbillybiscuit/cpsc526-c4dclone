@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: compute-pod-svc
+  namespace: distributed-system
+spec:
+  type: ClusterIP
+  selector:
+    app: compute-pod
+  ports:
+    - name: compute-engine-port
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+    - name: monitor-port
+      protocol: TCP
+      port: 8081
+      targetPort: 8081
+    - name: failure-agent-port
+      protocol: TCP
+      port: 8082
+      targetPort: 8082

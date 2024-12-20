@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: failure-server
+  namespace: central-services
+spec:
+  selector:
+    app: central-node
+  ports:
+    - name: http
+      protocol: TCP
+      port: 8092
+      targetPort: 8092

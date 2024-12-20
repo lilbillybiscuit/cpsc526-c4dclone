@@ -1,0 +1,3 @@
+scenarios:
+  - name: random_node_failure
+    probability: 0.1

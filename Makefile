@@ -1,4 +1,3 @@
-# Variables
 KUBECTL = kubectl
 DOCKER = docker
 NAMESPACE = distributed-system
@@ -25,36 +24,36 @@ create-namespaces: check-cluster
 	$(KUBECTL) label namespace central-services name=central-services --overwrite
 	$(KUBECTL) label namespace $(NAMESPACE) name=$(NAMESPACE) --overwrite
 
-# Build targets
+# Build targets (Paths updated)
 .PHONY: build-all
 build-all: build-compute build-c4d build-failure
 
 .PHONY: build-compute
 build-compute:
-	$(DOCKER) build -t compute-engine:$(COMPUTE_ENGINE_TAG) src/compute-engine
+	$(DOCKER) build -t compute-engine:$(COMPUTE_ENGINE_TAG) components/compute-engine
 
 .PHONY: build-c4d
 build-c4d:
-	$(DOCKER) build -t c4d-agent:$(C4D_AGENT_TAG) src/c4d-agent
+	$(DOCKER) build -t c4d-agent:$(C4D_AGENT_TAG) components/c4d-server
 
 .PHONY: build-failure
 build-failure:
-	$(DOCKER) build -t failure-agent:$(FAILURE_AGENT_TAG) src/failure-agent
+	$(DOCKER) build -t failure-agent:$(FAILURE_AGENT_TAG) components/failure-agent
 
 # Deployment targets
 .PHONY: deploy-secrets
 deploy-secrets: check-cluster create-namespaces
 	@echo "Deploying secrets..."
-	$(KUBECTL) apply -f deployments/central-server/mvcc/secrets.yaml -n central-services
-	$(KUBECTL) apply -f deployments/local-group/mvcc/secrets.yaml -n $(NAMESPACE)
+	$(KUBECTL) apply -f deploy/central-server/mvcc/secrets.yaml -n central-services # Update path if needed
+	$(KUBECTL) apply -f deploy/local-group/mvcc/secrets.yaml -n $(NAMESPACE) # Update path if needed
 
 .PHONY: deploy-central-services
 deploy-central-services: check-cluster create-namespaces deploy-secrets
 	@echo "Deploying central services..."
-	$(KUBECTL) apply -f deployments/central-server/task-server -n central-services
-	$(KUBECTL) apply -f deployments/central-server/c4d-server -n central-services
-	$(KUBECTL) apply -f deployments/central-server/failure-server -n central-services
-	$(KUBECTL) apply -f deployments/central-server/mvcc -n central-services
+	$(KUBECTL) apply -f deploy/central-server/task-server -n central-services
+	$(KUBECTL) apply -f deploy/central-server/c4d-server -n central-services
+	$(KUBECTL) apply -f deploy/central-server/failure-server -n central-services
+	$(KUBECTL) apply -f deploy/central-server/mvcc -n central-services
 
 .PHONY: deploy-local-group
 deploy-local-group: check-cluster create-namespaces
@@ -65,14 +64,14 @@ deploy-local-group: check-cluster create-namespaces
 	@echo "Deploying local group $(GROUP_NUM)..."
 	$(KUBECTL) create namespace local-group-$(GROUP_NUM) --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) label namespace local-group-$(GROUP_NUM) name=local-group-$(GROUP_NUM) --overwrite
-	$(KUBECTL) apply -f deployments/local-group/mvcc -n local-group-$(GROUP_NUM)
-	$(KUBECTL) apply -f deployments/local-group/compute-node -n local-group-$(GROUP_NUM)
-	$(KUBECTL) apply -f deployments/local-group/network-policies -n local-group-$(GROUP_NUM)
+	$(KUBECTL) apply -f deploy/local-group/mvcc -n local-group-$(GROUP_NUM)
+	$(KUBECTL) apply -f deploy/local-group/compute-node -n local-group-$(GROUP_NUM)
+	$(KUBECTL) apply -f deploy/local-group/network-policies -n local-group-$(GROUP_NUM)
 
 # Testing targets
 .PHONY: test-failure
 test-failure: check-cluster
-	./scripts/testing/run-failure-scenarios.sh
+	./scripts/testing/run-failure-scenarios.sh # Update path if you have this script
 
 # Cleanup targets
 .PHONY: cleanup

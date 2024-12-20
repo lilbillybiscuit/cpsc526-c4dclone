@@ -1,265 +1,253 @@
 #!/bin/bash
 
-# Create base directory structure
-mkdir -p {deployments,src,scripts/{setup,deployment,testing,utils},docs,monitoring}
 
-# Create source code directories
-mkdir -p src/{compute-engine,c4d-agent,failure-agent,storage-engine,central-servers,common}
-mkdir -p src/central-servers/{task-server,c4d-server,failure-server}
+# Create base directories
+mkdir -p packages/{compute-engine,failure-agent,mvcc,central}/{src,tests}
+mkdir -p kubernetes
+mkdir -p examples/{simple_training,failure_scenarios}
+mkdir -p scripts
 
-# Create deployment directories
-mkdir -p deployments/{central-server,local-group,monitoring}
-mkdir -p deployments/local-group/{compute-node,mvcc,network-policies}
+# Create README.md
+cat > README.md << 'EOF'
+# C4D Platform
 
-# Create monitoring directories
-mkdir -p monitoring/{prometheus,grafana}
+Research implementation of failure detection and recovery system based on C4D paper.
 
-# Create basic Dockerfile for each component
-for component in compute-engine c4d-agent failure-agent storage-engine
-do
-cat > src/$component/Dockerfile << EOF
+## Structure
+- packages/: Core components
+- kubernetes/: Deployment configurations
+- examples/: Usage examples
+- scripts/: Utility scripts
+
+## Quick Start
+1. Build images: `./scripts/build.sh`
+2. Deploy: `./scripts/deploy.sh`
+3. Run example: `python examples/simple_training/train.py`
+EOF
+
+# Create package structures
+for pkg in compute-engine failure-agent mvcc central; do
+    # Create package directories
+    mkdir -p packages/$pkg/src/c4d_${pkg//-/_}
+
+    # Create __init__.py files
+    touch packages/$pkg/src/c4d_${pkg//-/_}/__init__.py
+    
+    # Create pyproject.toml
+    cat > packages/$pkg/pyproject.toml << EOF
+[project]
+name = "c4d-${pkg}"
+version = "0.1.0"
+description = "${pkg} component for C4D platform"
+dependencies = [
+    "torch>=2.0.0",
+    "fastapi>=0.68.0",
+    "pydantic>=2.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+EOF
+
+    # Create Dockerfile
+    cat > packages/$pkg/Dockerfile << EOF
 FROM python:3.9-slim
 
 WORKDIR /app
-COPY src/ .
+COPY . .
+RUN pip install -e .
 
-RUN pip install --no-cache-dir -r requirements.txt
-
-CMD ["python", "main.py"]
+CMD ["python", "-m", "c4d_${pkg//-/_}"]
 EOF
 
-# Create basic source structure
-mkdir -p src/$component/src
-touch src/$component/src/{__init__.py,main.py}
-touch src/$component/requirements.txt
+    # Create README.md
+    cat > packages/$pkg/README.md << EOF
+# C4D ${pkg}
+
+Component of the C4D platform responsible for ${pkg//-/ } functionality.
+
+## Development
+1. Create virtual environment
+2. Install: \`pip install -e .\`
+3. Run tests: \`pytest\`
+EOF
 done
 
-# Create Makefile
-cat > Makefile << 'EOF'
-# Variables
-KUBECTL = kubectl
-KUSTOMIZE = kustomize
-DOCKER = docker
-NAMESPACE = distributed-system
+# Create specific component files
+# Compute Engine
+cat > packages/compute-engine/src/c4d_compute/engine.py << 'EOF'
+import torch
 
-# Docker image tags
-COMPUTE_ENGINE_TAG = latest
-C4D_AGENT_TAG = latest
-FAILURE_AGENT_TAG = latest
-
-# Build targets
-.PHONY: build-all
-build-all: build-compute build-c4d build-failure
-
-.PHONY: build-compute
-build-compute:
-	$(DOCKER) build -t compute-engine:$(COMPUTE_ENGINE_TAG) src/compute-engine
-
-.PHONY: build-c4d
-build-c4d:
-	$(DOCKER) build -t c4d-agent:$(C4D_AGENT_TAG) src/c4d-agent
-
-.PHONY: build-failure
-build-failure:
-	$(DOCKER) build -t failure-agent:$(FAILURE_AGENT_TAG) src/failure-agent
-
-# Deployment targets
-.PHONY: deploy-all
-deploy-all: deploy-central deploy-local-groups
-
-.PHONY: deploy-central
-deploy-central:
-	./scripts/deployment/deploy-central.sh
-
-.PHONY: deploy-local-group
-deploy-local-group:
-	./scripts/deployment/deploy-local-group.sh $(GROUP_NUM)
-
-# Testing targets
-.PHONY: test-failure
-test-failure:
-	./scripts/testing/run-failure-scenarios.sh
-
-# Utility targets
-.PHONY: setup-cluster
-setup-cluster:
-	./scripts/setup/init-cluster.sh
-
-.PHONY: collect-logs
-collect-logs:
-	./scripts/utils/log-collection.sh $(NAMESPACE)
-
-# Cleanup targets
-.PHONY: cleanup
-cleanup:
-	$(KUBECTL) delete namespace $(NAMESPACE)
+class ComputeEngine:
+    def __init__(self, model_config):
+        self.model_config = model_config
+        self.current_state = None
+    
+    def train_epoch(self):
+        # Training logic here
+        pass
+    
+    def create_snapshot(self):
+        # Create MVCC snapshot
+        pass
+    
+    def recover_from_snapshot(self):
+        # Recovery logic
+        pass
 EOF
 
-# Create deployment scripts
-cat > scripts/deployment/deploy-local-group.sh << 'EOF'
-#!/bin/bash
+# Failure Agent
+cat > packages/failure-agent/src/c4d_failure/agent.py << 'EOF'
+import random
+import time
 
-# Deploy a local group to the cluster
-# Usage: ./deploy-local-group.sh <group-number>
-
-GROUP_NUM=$1
-
-if [ -z "$GROUP_NUM" ]; then
-    echo "Usage: ./deploy-local-group.sh <group-number>"
-    exit 1
-fi
-
-# Create namespace for the local group
-NAMESPACE="local-group-${GROUP_NUM}"
-kubectl create namespace $NAMESPACE
-
-# Apply configurations
-kubectl apply -f deployments/local-group --namespace $NAMESPACE
-
-# Wait for pods to be ready
-kubectl wait --for=condition=ready pods \
-    --namespace $NAMESPACE \
-    --selector=app=compute-node \
-    --timeout=300s
-
-echo "Local group $GROUP_NUM deployed successfully"
+class FailureAgent:
+    def __init__(self, failure_probability, latency_range):
+        self.failure_probability = failure_probability
+        self.latency_range = latency_range
+    
+    def should_inject_failure(self):
+        return random.random() < self.failure_probability
+    
+    def inject_latency(self):
+        latency = random.uniform(*self.latency_range)
+        time.sleep(latency / 1000)  # Convert to seconds
 EOF
 
-cat > scripts/deployment/deploy-central.sh << 'EOF'
-#!/bin/bash
-
-# Deploy central services
-NAMESPACE="central-services"
-
-kubectl create namespace $NAMESPACE
-kubectl apply -f deployments/central-server --namespace $NAMESPACE
-
-echo "Central services deployed successfully"
+# MVCC
+cat > packages/mvcc/src/c4d_mvcc/node.py << 'EOF'
+class MVCCNode:
+    def __init__(self):
+        self.versions = {}
+        self.current_version = 0
+    
+    def store_version(self, data):
+        self.versions[self.current_version] = data
+        self.current_version += 1
+    
+    def get_version(self, version):
+        return self.versions.get(version)
 EOF
 
-# Create testing scripts
-cat > scripts/testing/run-failure-scenarios.sh << 'EOF'
-#!/bin/bash
-
-# Run failure scenarios
-# Usage: ./run-failure-scenarios.sh <scenario-name>
-
-SCENARIO=$1
-
-case $SCENARIO in
-    "network-partition")
-        kubectl exec -it failure-agent -- /bin/sh -c "simulate-network-failure"
-        ;;
-    "process-crash")
-        kubectl exec -it failure-agent -- /bin/sh -c "simulate-process-crash"
-        ;;
-    "storage-failure")
-        kubectl exec -it failure-agent -- /bin/sh -c "simulate-storage-failure"
-        ;;
-    *)
-        echo "Unknown scenario: $SCENARIO"
-        echo "Available scenarios: network-partition, process-crash, storage-failure"
-        exit 1
-        ;;
-esac
+# Central
+cat > packages/central/src/c4d_central/task_distributor.py << 'EOF'
+class TaskDistributor:
+    def __init__(self):
+        self.tasks = {}
+        self.node_assignments = {}
+    
+    def assign_task(self, task_id, node_id):
+        self.tasks[task_id] = "running"
+        self.node_assignments[node_id] = task_id
+    
+    def handle_node_failure(self, node_id):
+        if node_id in self.node_assignments:
+            task_id = self.node_assignments[node_id]
+            self.tasks[task_id] = "failed"
 EOF
 
-# Create basic Kubernetes manifests
-cat > deployments/local-group/compute-node/deployment.yaml << 'EOF'
-apiVersion: apps/v1
-kind: Deployment
+# Create Kubernetes configurations
+# Compute Pod
+cat > kubernetes/compute-pod.yaml << 'EOF'
+apiVersion: "kubeflow.org/v1"
+kind: PyTorchJob
 metadata:
-  name: compute-node
+  name: c4d-training-job
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: compute-node
-  template:
-    metadata:
-      labels:
-        app: compute-node
-    spec:
-      containers:
-      - name: compute-engine
-        image: compute-engine:latest
-      - name: c4d-agent
-        image: c4d-agent:latest
-      - name: failure-agent
-        image: failure-agent:latest
-      - name: storage-engine
-        image: storage-engine:latest
+  pytorchReplicaSpecs:
+    Worker:
+      replicas: 3
+      template:
+        spec:
+          containers:
+          - name: pytorch
+            image: c4d-compute:latest
+          - name: failure-agent
+            image: c4d-failure:latest
+          - name: mvcc
+            image: c4d-mvcc:latest
 EOF
 
-cat > deployments/local-group/mvcc/statefulset.yaml << 'EOF'
-apiVersion: apps/v1
-kind: StatefulSet
+# Services
+cat > kubernetes/services.yaml << 'EOF'
+apiVersion: v1
+kind: Service
 metadata:
-  name: mvcc
+  name: central-node-service
 spec:
-  replicas: 2
   selector:
-    matchLabels:
-      app: mvcc
-  template:
-    metadata:
-      labels:
-        app: mvcc
-    spec:
-      containers:
-      - name: mvcc
-        image: postgres:13
-        env:
-        - name: POSTGRES_PASSWORD
-          value: mysecretpassword
+    app: central-node
+  ports:
+    - port: 8090
+      name: task-distributor
+    - port: 8091
+      name: c4d-server
 EOF
 
-# Create README
-cat > README.md << 'EOF'
-# Distributed System Research Project
+# Create example training script
+cat > examples/simple_training/train.py << 'EOF'
+from c4d_compute import engine
+from c4d_failure import agent
 
-This project implements a distributed system for research purposes, focusing on failure detection in machine learning models.
+def main():
+    # Initialize compute engine
+    compute = engine.ComputeEngine(
+        model_config={
+            "layers": [64, 32, 16],
+            "learning_rate": 0.001
+        }
+    )
+    
+    # Set up failure agent
+    failure_agent = agent.FailureAgent(
+        failure_probability=0.1,
+        latency_range=(100, 500)
+    )
+    
+    # Training loop
+    for epoch in range(10):
+        try:
+            compute.train_epoch()
+            if epoch % 2 == 0:
+                compute.create_snapshot()
+        except Exception as e:
+            print(f"Failure detected: {e}")
+            compute.recover_from_snapshot()
 
-## Structure
-- `deployments/`: Kubernetes manifests
-- `src/`: Source code for all components
-- `scripts/`: Automation scripts
-- `monitoring/`: Monitoring configurations
+if __name__ == "__main__":
+    main()
+EOF
 
-## Quick Start
+# Create utility scripts
+# Build script
+cat > scripts/build.sh << 'EOF'
+#!/bin/bash
 
-1. Build all components:
-```
-make build-all
-```
+# Build all Docker images
+cd packages/compute-engine && docker build -t c4d-compute:latest .
+cd ../failure-agent && docker build -t c4d-failure:latest .
+cd ../mvcc && docker build -t c4d-mvcc:latest .
+cd ../central && docker build -t c4d-central:latest .
+EOF
 
-2. Deploy central services:
-```
-make deploy-central
-```
+# Deploy script
+cat > scripts/deploy.sh << 'EOF'
+#!/bin/bash
 
-3. Deploy a local group:
-```
-make deploy-local-group GROUP_NUM=1
-```
+# Apply Kubernetes configurations
+kubectl apply -f kubernetes/
+EOF
 
-4. Run failure scenarios:
-```
-make test-failure
-```
+# Cleanup script
+cat > scripts/cleanup.sh << 'EOF'
+#!/bin/bash
 
-## Components
-- Compute Engine: Main processing unit
-- C4D Agent: Failure detection
-- Failure Agent: Failure simulation
-- Storage Engine: Data persistence
-- Central Servers: Task distribution and coordination
+# Remove all deployments
+kubectl delete -f kubernetes/
 EOF
 
 # Make scripts executable
-chmod +x scripts/deployment/deploy-local-group.sh
-chmod +x scripts/deployment/deploy-central.sh
-chmod +x scripts/testing/run-failure-scenarios.sh
+chmod +x scripts/*.sh
 
 echo "Project structure created successfully!"
-echo "See README.md for usage instructions."

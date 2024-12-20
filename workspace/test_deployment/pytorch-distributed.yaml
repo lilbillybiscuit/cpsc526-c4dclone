@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pytorch-dist-config
+data:
+  MASTER_PORT: "12355"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pytorch-dist-service
+spec:
+  selector:
+    app: pytorch-dist
+  ports:
+    - protocol: TCP
+      port: 12355
+      targetPort: 12355
+  clusterIP: None  # Headless service
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pytorch-dist
+spec:
+  serviceName: pytorch-dist-service
+  replicas: 4  # Number of worker pods (adjust as needed)
+  selector:
+    matchLabels:
+      app: pytorch-dist
+  template:
+    metadata:
+      labels:
+        app: pytorch-dist
+    spec:
+      containers:
+        - name: pytorch-worker
+          image: your-docker-registry/your-pytorch-image:latest  # Replace with your image name
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 12355
+          env:
+            - name: MASTER_ADDR
+              value: "pytorch-dist-service"
+            - name: MASTER_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: pytorch-dist-config
+                  key: MASTER_PORT
+            - name: WORLD_SIZE
+              value: "4"
+            - name: RANK
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.name"
+          command: ["/bin/bash", "-c"]
+          args:
+          - |
+            RANK_ID=$(echo $RANK | grep -o '[0-9]*$')
+            export RANK=$RANK_ID
+            python train.py

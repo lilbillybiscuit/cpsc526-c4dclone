@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: compute-node
+  namespace: distributed-system
+spec:
+  serviceName: compute-node-svc
+  replicas: 1
+  selector:
+    matchLabels:
+      app: compute-node
+  template:
+    metadata:
+      labels:
+        app: compute-node
+    spec:
+      containers:
+      - name: mvcc-node
+        image: mvcc:latest
+        ports:
+          - containerPort: 8083
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+          - name: mvcc-data
+            mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: mvcc-data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 1Gi
