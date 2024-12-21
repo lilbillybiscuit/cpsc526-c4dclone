@@ -2,7 +2,8 @@ import os
 import psutil
 import time
 import threading
-from flask import Flask, jsonify
+import requests
+from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
@@ -12,6 +13,8 @@ class Monitor:
         self.ram_usage = 0
         self.cpu_usage = 0
         self.compute_engine_status = "unknown"
+        self.metrics = {} # {"key": [values]}
+        self.c4d_server_url = os.getenv("C4D_SERVER_URL", "http://c4d-server.central-services:8091")
 
     def update_metrics(self):
         """Updates RAM usage, CPU usage, and compute engine status."""
@@ -28,16 +31,45 @@ class Monitor:
 
             time.sleep(1)
 
+    def append_metric(self, key,value):
+        """Appends a value to the metric log."""
+        if key not in self.metrics:
+            self.metrics[key] = []
+        self.metrics[key].append(value)
+    
+    def send_metrics_to_server(self):
+        """Periodically sends metrics to the C4D server."""
+        while not self.stop_event.is_set():
+            try:
+                response = requests.post(
+                    f"{self.c4d_server_url}/metrics", 
+                    json=self.metrics, 
+                    timeout=5
+                )
+                if response.status_code == 200:
+                    print("Metrics sent successfully to C4D server.")
+                    # self.metrics = {}
+                else:
+                    print(f"Failed to send metrics to C4D server. Status code: {response.status_code}")
+            except requests.exceptions.RequestException as e:
+                print(f"Error sending metrics to C4D server: {e}")
+            time.sleep(30)
+
     def start(self):
         """Starts the monitoring thread."""
         self.monitor_thread = threading.Thread(target=self.update_metrics)
         self.monitor_thread.start()
+
+        self.metrics_sender_thread = threading.Thread(target=self.send_metrics_to_server)
+        self.metrics_sender_thread.start()
+
         print("Monitor started.")
 
     def stop(self):
         """Stops the monitoring thread."""
         self.stop_event.set()
         self.monitor_thread.join()
+        self.metrics_sender_thread.join()
         print("Monitor stopped.")
 
 # Create a Monitor instance
@@ -51,6 +83,22 @@ def get_metrics():
         "cpu_usage": monitor.cpu_usage,
         "compute_engine_status": monitor.compute_engine_status,
     })
+
+@app.route('/env', methods=['GET'])
+def get_env():
+    return jsonify(
+        {key: value for key, value in os.environ.items()}
+    )
+
+@app.route('/log', methods=['POST'])
+def log_metric():
+    data = request.get_json()
+    key = data.get("key")
+    value = data.get("value")
+    if not key or not value:
+        return jsonify({"error": "Invalid key or value."}), 400
+    monitor.append_metric(key, value)
+    return jsonify({"message": "Metric logged.", "key": key, "value": value})
 
 def shutdown_handler(signum, frame):
     print("Shutting down monitor...")

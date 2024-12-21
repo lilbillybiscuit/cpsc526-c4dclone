@@ -3,7 +3,7 @@ import time
 import random
 import threading
 import requests
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 
@@ -87,6 +87,33 @@ class C4DServer:
 
             self.calculate_failure_probabilities()
             time.sleep(10)
+    
+    def compute_aggregated_metrics(self):
+        """Computes aggregated metrics across all nodes."""
+        with self.lock:
+            aggregated_metrics = {
+                "total_nodes": len(self.node_metrics),
+                "average_latency": 0,
+                "average_memory_usage": 0,
+                "failure_probabilities": {}
+            }
+
+            total_latency = 0
+            total_memory_usage = 0
+            node_count = len(self.node_metrics)
+
+            if node_count > 0:
+                for node_id, metrics in self.node_metrics.items():
+                    total_latency += sum(metrics["latency"]) / len(metrics["latency"]) if metrics["latency"] else 0
+                    total_memory_usage += sum(metrics["memory_usage"]) / len(metrics["memory_usage"]) if metrics["memory_usage"] else 0
+
+                aggregated_metrics["average_latency"] = total_latency / node_count
+                aggregated_metrics["average_memory_usage"] = total_memory_usage / node_count
+
+            # Include failure probabilities
+            aggregated_metrics["failure_probabilities"] = self.failure_probabilities.copy()
+
+            return aggregated_metrics
 
     def register_node(self, node_id, node_url):
         """Registers a node with the C4D server to collect metrics."""
@@ -120,6 +147,12 @@ def get_node_status(node_id):
         return jsonify({"node_id": node_id, "status": status})
     else:
         return jsonify({"error": "Node not found"}), 404
+
+@app.route('/aggregated_metrics', methods=['GET'])
+def get_aggregated_metrics():
+    """Provides aggregated metrics for all nodes."""
+    aggregated_metrics = c4d_server.compute_aggregated_metrics()
+    return jsonify(aggregated_metrics)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8091)
