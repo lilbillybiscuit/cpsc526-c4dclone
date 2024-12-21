@@ -20,6 +20,11 @@ kubectl apply -f deploy/task-distributor/service.yaml -n central-services
 kubectl apply -f deploy/c4d-server/service.yaml -n central-services
 kubectl apply -f deploy/failure-server/service.yaml -n central-services
 
+# Deploy shared storage
+echo "Deploying shared storage..."
+kubectl apply -f deploy/shared-storage/pv.yaml
+kubectl apply -f deploy/shared-storage/pvc.yaml
+
 # Deploy compute nodes
 echo "Deploying compute nodes..."
 kubectl apply -f deploy/compute-node/statefulset.yaml -n distributed-system

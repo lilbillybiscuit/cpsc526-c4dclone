@@ -17,6 +17,7 @@ spec:
       containers:
       - name: mvcc-node
         image: mvcc:latest
+        imagePullPolicy: IfNotPresent
         ports:
           - containerPort: 8083
         resources:

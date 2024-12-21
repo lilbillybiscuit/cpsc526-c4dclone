@@ -10,11 +10,14 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
-# os.environ["GLOO_SOCKET_IFNAME"]="enp0s6" 
+# os.environ["GLOO_SOCKET_IFNAME"]="enp0s6"
+
+# Available variables from PyTorchOperator
+# MASTER_ADDR, MASTER_PORT, PET_MASTER_ADDR, PET_MASTER_PORT, PET_NNODES, PET_NODE_RANK, PET_NPROC_PER_NODE, RANK, WORLD_SIZE, TASK_ID
+CHECKPOINT_DIR = os.environ.get("CHECKPOINT_DIR", "/mnt/checkpoints")
 
 # -----------------------------------------------------------------------------
 # default config values for a small model suitable for CPU training
-out_dir = 'out'
 eval_interval = 20
 log_interval = 1
 eval_iters = 20
@@ -61,7 +64,7 @@ def setup_distributed():
     # Initialize distributed training
     init_process_group(backend=backend)
     rank = int(os.environ['RANK'])
-    local_rank = int(os.environ['LOCAL_RANK'])
+    # local_rank = int(os.environ['LOCAL_RANK'])
     world_size = int(os.environ['WORLD_SIZE'])
     is_master = rank == 0
     
@@ -108,7 +111,9 @@ def train():
     data_dir = os.path.join('data', dataset)
     
     if is_master:
-        os.makedirs(out_dir, exist_ok=True)
+        os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+        os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+        print(f"Checkpoints will be saved to: {CHECKPOINT_DIR}")
     
     # Model initialization
     if os.path.exists(os.path.join(data_dir, 'meta.pkl')):
@@ -154,8 +159,19 @@ def train():
         betas=(beta1, beta2),
         device_type='cpu'
     )
+
+    start_iter = 0
+    if os.path.isfile(os.path.join(CHECKPOINT_DIR, 'checkpoint.pt')):
+        checkpoint = torch.load(os.path.join(CHECKPOINT_DIR, 'checkpoint.pt'), map_location='cpu')
+        # Load model and optimizer state
+        gpt_model.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        # Load other variables
+        start_iter = checkpoint.get('iter_num', 0) + 1  # Start from the next iteration
+        best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+        print(f"Resuming training from iteration {start_iter}")
     
-    iter_num = 0
+    iter_num = start_iter
     best_val_loss = float('inf')
     
     while True:
@@ -223,7 +239,8 @@ def train():
                             'iter_num': iter_num,
                             'best_val_loss': best_val_loss,
                         }
-                        torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                        torch.save(checkpoint, os.path.join(CHECKPOINT_DIR, 'ckpt.pt'))
+                        print(f"Checkpoint saved at iteration {iter_num}")
             
             model.train()
         
@@ -235,4 +252,7 @@ def train():
         destroy_process_group()
 
 if __name__ == '__main__':
+    # print out all environment variables and configuration
+    import pprint
+    pprint.pprint(dict(os.environ))
     train()

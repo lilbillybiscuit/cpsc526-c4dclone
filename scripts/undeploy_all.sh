@@ -27,6 +27,11 @@ kubectl delete -f deploy/central-node/deployment.yaml -n central-services --igno
 # kubectl delete -f deploy/central-server/mvcc/secrets.yaml -n central-services --ignore-not-found
 # kubectl delete -f deploy/compute-node/mvcc/secrets.yaml -n distributed-system --ignore-not-found
 
+# Delete shared storage resources
+echo "Removing shared storage resources..."
+kubectl delete -f deploy/shared-storage/pvc.yaml -n distributed-system --ignore-not-found
+kubectl delete -f deploy/shared-storage/pv.yaml --ignore-not-found
+
 # Delete the namespaces
 echo "Removing namespaces..."
 kubectl delete namespace distributed-system --ignore-not-found

@@ -7,8 +7,7 @@ TAG="latest"
 build_image() {
   local component_name=$1
   echo "Building image for ${component_name}..."
-  docker build -t lilbillybiscuit/${component_name}:${TAG} components/${component_name}
-  docker build -t ${component_name}:${TAG} components/${component_name}
+  docker build -t lilbillybiscuit/${component_name}:${TAG} -t ${component_name}:${TAG} components/${component_name}
   if [ $? -eq 0 ]; then
     echo "Image for ${component_name} built successfully."
   else

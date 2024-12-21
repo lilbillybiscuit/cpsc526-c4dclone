@@ -6,3 +6,5 @@ __pycache__/
 results/raw/*
 results/processed/*
 .env
+
+./minikube-shared

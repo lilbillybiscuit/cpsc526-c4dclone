@@ -15,7 +15,7 @@ spec:
         spec:
           containers:
             - name: pytorch
-              image: compute-engine:latest  # Use your compute-engine image
+              image: lilbillybiscuit/compute-engine:latest  # Use your compute-engine image
               imagePullPolicy: IfNotPresent
               command: ["python", "train.py"]
               ports:
@@ -30,49 +30,21 @@ spec:
                   value: compute-node-svc # Correct service name for MVCC
                 - name: MVCC_PORT
                   value: "8083"
+                - name: CHECKPOINT_DIR
+                  value: /mnt/checkpoints
+              volumeMounts:
+                - name: checkpoint-storage
+                  mountPath: /mnt/checkpoints
               resources:
                 requests:
-                  memory: "512Mi"
-                  cpu: "500m"
-                limits:
                   memory: "1Gi"
                   cpu: "1000m"
-    Worker:
-      replicas: 2  # Adjust the number of worker replicas as needed
-      restartPolicy: OnFailure
-      template:
-        metadata:
-          labels:
-            app: compute-pod
-        spec:
-          containers:
-            - name: pytorch
-              image: compute-engine:latest # Use your compute-engine image
-              imagePullPolicy: IfNotPresent
-              command: ["python", "train.py"]
-              ports:
-                - name: pytorch
-                  containerPort: 8080
-              env:
-                - name: TASK_ID
-                  valueFrom:
-                    fieldRef:
-                      fieldPath: metadata.name
-                - name: MVCC_HOST
-                  value: compute-node-svc # Correct service name for MVCC
-                - name: MVCC_PORT
-                  value: "8083"
-              resources:
-                requests:
-                  memory: "512Mi"
-                  cpu: "500m"
                 limits:
-                  memory: "1Gi"
-                  cpu: "1000m"
-
-            # Monitoring sidecar
+                  memory: "2Gi"
+                  cpu: "2000m"
             - name: monitor
-              image: monitor:latest
+              image: lilbillybiscuit/monitor:latest
+              imagePullPolicy: IfNotPresent
               ports:
                 - name: monitor
                   containerPort: 8081
@@ -89,11 +61,100 @@ spec:
 
             # Failure agent sidecar
             - name: failure-agent
-              image: failure-agent:latest
+              image: lilbillybiscuit/failure-agent:latest
+              imagePullPolicy: IfNotPresent
               ports:
                 - name: failure-agent
                   containerPort: 8082
               env:
+                - name: TASK_ID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: FAILURE_SERVER_URL
+                  value: http://failure-server:8092
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "128Mi"
+                  cpu: "200m"
+          volumes:
+            - name: shared-memory
+              emptyDir:
+                medium: Memory
+            - name: checkpoint-storage
+              persistentVolumeClaim:
+                claimName: checkpoint-pvc
+    Worker:
+      replicas: 2  # Adjust the number of worker replicas as needed
+      restartPolicy: OnFailure
+      template:
+        metadata:
+          labels:
+            app: compute-pod
+        spec:
+          containers:
+            - name: pytorch
+              image: lilbillybiscuit/compute-engine:latest # Use your compute-engine image
+              imagePullPolicy: IfNotPresent
+              command: ["python", "train.py"]
+              ports:
+                - name: pytorch
+                  containerPort: 8080
+              env:
+                - name: TASK_ID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: MVCC_HOST
+                  value: compute-node-svc # Correct service name for MVCC
+                - name: MVCC_PORT
+                  value: "8083"
+                - name: CHECKPOINT_DIR
+                  value: /mnt/checkpoints
+              volumeMounts:
+                - name: checkpoint-storage
+                  mountPath: /mnt/checkpoints
+              resources:
+                requests:
+                  memory: "1Gi"
+                  cpu: "1000m"
+                limits:
+                  memory: "2Gi"
+                  cpu: "2000m"
+
+            # Monitoring sidecar
+            - name: monitor
+              image: lilbillybiscuit/monitor:latest
+              imagePullPolicy: IfNotPresent
+              ports:
+                - name: monitor
+                  containerPort: 8081
+              volumeMounts:
+                - name: shared-memory
+                  mountPath: /dev/shm
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "128Mi"
+                  cpu: "200m"
+
+            # Failure agent sidecar
+            - name: failure-agent
+              image: lilbillybiscuit/failure-agent:latest
+              imagePullPolicy: IfNotPresent
+              ports:
+                - name: failure-agent
+                  containerPort: 8082
+              env:
+                - name: TASK_ID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
                 - name: FAILURE_SERVER_URL
                   value: http://failure-server:8092
               resources:
@@ -104,7 +165,11 @@ spec:
                   memory: "128Mi"
                   cpu: "200m"
 
+
           volumes:
             - name: shared-memory
               emptyDir:
                 medium: Memory
+            - name: checkpoint-storage
+              persistentVolumeClaim:
+                claimName: checkpoint-pvc

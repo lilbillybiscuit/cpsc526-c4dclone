@@ -1,6 +1,13 @@
-FROM python:3.9-slim
+FROM golang:1.23-alpine AS builder
+
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY src/ .
-CMD ["python", "main.py"]
+
+COPY go.mod ./
+RUN go mod download
+COPY . ./
+RUN go build -o main .
+
+FROM alpine:latest
+WORKDIR /app
+COPY --from=builder /app/main .
+CMD ["./main"]

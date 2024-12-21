@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: checkpoint-pv
+  namespace: distributed-system
+spec:
+  capacity:
+    storage: 5Gi  # adjust capacity as needed
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  hostPath:
+    path: /mnt/minikube-shared/checkpoints
