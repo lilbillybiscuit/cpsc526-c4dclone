@@ -22,6 +22,12 @@ spec:
                 - name: pytorch
                   containerPort: 8080
               env:
+                - name: NODE_ID
+                  value: "$(TASK_ID)-$(RANK)-$(ROLE)"
+                - name: ROLE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['training.kubeflow.org/job-role']
                 - name: TASK_ID
                   valueFrom:
                     fieldRef:
@@ -48,6 +54,17 @@ spec:
               ports:
                 - name: monitor
                   containerPort: 8081
+              env:
+                - name: NODE_ID
+                  value: "$(TASK_ID)-$(RANK)-$(ROLE)"
+                - name: ROLE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['training.kubeflow.org/job-role']
+                - name: TASK_ID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
               volumeMounts:
                 - name: shared-memory
                   mountPath: /dev/shm
@@ -67,6 +84,12 @@ spec:
                 - name: failure-agent
                   containerPort: 8082
               env:
+                - name: NODE_ID
+                  value: "$(TASK_ID)-$(RANK)-$(ROLE)"
+                - name: ROLE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['training.kubeflow.org/job-role']
                 - name: TASK_ID
                   valueFrom:
                     fieldRef:
@@ -104,6 +127,12 @@ spec:
                 - name: pytorch
                   containerPort: 8080
               env:
+                - name: NODE_ID
+                  value: "$(TASK_ID)-$(RANK)-$(ROLE)"
+                - name: ROLE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['training.kubeflow.org/job-role']
                 - name: TASK_ID
                   valueFrom:
                     fieldRef:
@@ -132,6 +161,17 @@ spec:
               ports:
                 - name: monitor
                   containerPort: 8081
+              env:
+                - name: NODE_ID
+                  value: "$(TASK_ID)-$(RANK)-$(ROLE)"
+                - name: ROLE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['training.kubeflow.org/job-role']
+                - name: TASK_ID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
               volumeMounts:
                 - name: shared-memory
                   mountPath: /dev/shm
@@ -151,6 +191,12 @@ spec:
                 - name: failure-agent
                   containerPort: 8082
               env:
+                - name: NODE_ID
+                  value: "$(TASK_ID)-$(RANK)-$(ROLE)"
+                - name: ROLE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.labels['training.kubeflow.org/job-role']
                 - name: TASK_ID
                   valueFrom:
                     fieldRef:

@@ -46,22 +46,43 @@ class Monitor:
         self.metrics[key].append(value)
     
     def send_metrics_to_server(self):
-        """Periodically sends metrics to the C4D server."""
+        """Periodically sends the metrics log to the C4D server."""
         while not self.stop_event.is_set():
+            payload = {
+                # "node_id": os.getenv("NODE_ID", "unknown"),
+                "node_id": os.getenv("TASK_ID", "unknown"),
+                "metrics": {
+                    "cpu_usage": [self.cpu_usage],
+                    "ram_usage": [self.ram_usage],
+                    "latency": []  # Add latency if applicable
+                }
+            }
+            print(f"Sending payload to C4D server: {payload}")  # Debugging line
             try:
-                response = requests.post(
-                    f"{self.c4d_server_url}/metrics", 
-                    json=self.metrics, 
-                    timeout=5
-                )
+                response = requests.post(f"{self.c4d_server_url}/metrics", json=payload, timeout=10)
                 if response.status_code == 200:
-                    print("Metrics sent successfully to C4D server.")
-                    # self.metrics = {}
+                    print("Metrics successfully sent to C4D server.")
                 else:
                     print(f"Failed to send metrics to C4D server. Status code: {response.status_code}")
-            except requests.exceptions.RequestException as e:
+            except requests.RequestException as e:
                 print(f"Error sending metrics to C4D server: {e}")
-            time.sleep(30)
+            time.sleep(2)
+
+    def register_with_server(self):
+        """Registers the node with the C4D server."""
+        payload = {
+            # "node_id": os.getenv("NODE_ID", "unknown"),
+            "node_id": os.getenv("TASK_ID", "unknown"),
+            "node_url": f"http://{os.getenv('HOSTNAME', 'localhost')}:8081"
+        }
+        try:
+            response = requests.post(f"{self.c4d_server_url}/register", json=payload, timeout=10)
+            if response.status_code == 200:
+                print(f"Node {payload['node_id']} successfully registered with C4D server.")
+            else:
+                print(f"Failed to register node with C4D server. Status code: {response.status_code}")
+        except requests.RequestException as e:
+            print(f"Error registering node with C4D server: {e}")
 
     def start(self):
         """Starts the monitoring thread."""
@@ -82,6 +103,7 @@ class Monitor:
 
 # Create a Monitor instance
 monitor = Monitor()
+monitor.register_with_server()
 monitor.start()
 
 @app.route('/metrics', methods=['GET'])

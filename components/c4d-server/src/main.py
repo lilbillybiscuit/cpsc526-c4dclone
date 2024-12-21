@@ -119,6 +119,7 @@ class C4DServer:
         """Registers a node with the C4D server to collect metrics."""
         with self.lock:
             self.node_metrics[node_id] = {"latency": [], "memory_usage": [], "node_url": node_url}
+            app.logger.info(f"Node {node_id} registered with URL {node_url}")
 
 # Initialize the C4D server
 c4d_server = C4DServer()
@@ -127,6 +128,10 @@ c4d_server = C4DServer()
 metrics_thread = threading.Thread(target=c4d_server.collect_metrics)
 metrics_thread.daemon = True
 metrics_thread.start()
+
+@app.route('/')
+def home():
+    return jsonify({"message": "C4D Server is running"}), 200
 
 @app.route('/register', methods=['POST'])
 def register_node():
@@ -147,6 +152,39 @@ def get_node_status(node_id):
         return jsonify({"node_id": node_id, "status": status})
     else:
         return jsonify({"error": "Node not found"}), 404
+
+@app.route('/metrics', methods=['POST'])
+def receive_metrics():
+    """Receives metrics from monitor nodes."""
+    # return jsonify({"message": "Metrics received"}), 200
+
+    data = request.get_json()
+    app.logger.info(f"Received payload: {data}")
+    
+    if not data:
+        app.logger.error("No JSON payload received")
+        return jsonify({"error": "Invalid request. No data received."}), 400
+    
+    node_id = data.get("node_id")
+    metrics = data.get("metrics")
+    
+    if not node_id or not metrics:
+        app.logger.error(f"Invalid data structure: {data}")
+        return jsonify({"error": "Invalid data"}), 400
+    
+    with c4d_server.lock:
+        if node_id not in c4d_server.node_metrics:
+            app.logger.error(f"Node {node_id} not registered")
+            return jsonify({"error": f"Node {node_id} not registered"}), 404
+        
+        # Process metrics
+        for key, value in metrics.items():
+            if key not in c4d_server.node_metrics[node_id]:
+                c4d_server.node_metrics[node_id][key] = []
+            c4d_server.node_metrics[node_id][key].extend(value)
+            c4d_server.node_metrics[node_id][key] = c4d_server.node_metrics[node_id][key][-10:]
+
+    return jsonify({"message": "Metrics received"}), 200
 
 @app.route('/aggregated_metrics', methods=['GET'])
 def get_aggregated_metrics():
