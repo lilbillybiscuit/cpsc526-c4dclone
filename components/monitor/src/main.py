@@ -3,6 +3,7 @@ import psutil
 import time
 import threading
 import requests
+import signal
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)
@@ -15,6 +16,13 @@ class Monitor:
         self.compute_engine_status = "unknown"
         self.metrics = {} # {"key": [values]}
         self.c4d_server_url = os.getenv("C4D_SERVER_URL", "http://c4d-server.central-services:8091")
+        self.dist_env_vars = {
+            "MASTER_ADDR": os.environ.get("MASTER_ADDR"),
+            "MASTER_PORT": os.environ.get("MASTER_PORT"),
+            "WORLD_SIZE": os.environ.get("WORLD_SIZE"),
+            "RANK": os.environ.get("RANK"),
+            "TASK_ID": os.environ.get("TASK_ID"),
+        }
 
     def update_metrics(self):
         """Updates RAM usage, CPU usage, and compute engine status."""
@@ -99,6 +107,10 @@ def log_metric():
         return jsonify({"error": "Invalid key or value."}), 400
     monitor.append_metric(key, value)
     return jsonify({"message": "Metric logged.", "key": key, "value": value})
+
+@app.route('/dist_env', methods=['GET'])
+def get_dist_env():
+    return jsonify(monitor.dist_env_vars)
 
 def shutdown_handler(signum, frame):
     print("Shutting down monitor...")

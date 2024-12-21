@@ -20,6 +20,7 @@ build_image() {
 build_image compute-engine
 build_image c4d-server
 build_image failure-agent
+build_image failure-server
 build_image monitor
 build_image mvcc
 build_image task-distributor
