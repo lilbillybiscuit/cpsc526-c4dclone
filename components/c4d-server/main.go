@@ -72,6 +72,23 @@ func (c *C4DServer) CalculateFailureProbabilities() {
 	}
 }
 
+func (c *C4DServer) HandleNodeFailure() {
+	for nodeID, probability := range c.FailureProbabilities {
+		if probability > 0.8 { // Threshold for failure
+			fmt.Printf("Node %s is at high risk of failure. Offloading tasks.\n", nodeID)
+
+			// Notify other nodes to handle the workload
+			// Add logic to save the state or checkpoint
+			for id, status := range c.NodeStatuses {
+				if status == "healthy" && id != nodeID {
+					fmt.Printf("Offloading tasks from %s to %s.\n", nodeID, id)
+					// Add task redistribution logic
+				}
+			}
+		}
+	}
+}
+
 func (c *C4DServer) CollectMetrics() {
 	for {
 		c.Mutex.Lock()

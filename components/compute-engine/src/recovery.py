@@ -57,3 +57,15 @@ class C4DRecovery:
         except requests.RequestException as e:
             logger.error(f"Failed to assign rank: {e}")
             raise
+
+    def offload_model_state(self, source_node_id, target_node_id):
+        """
+        Offload the model state from a failing node to another healthy node.
+        """
+        payload = {"source_node_id": source_node_id, "target_node_id": target_node_id}
+        try:
+            response = requests.post(f"{self.agent_url}/offload", json=payload)
+            response.raise_for_status()
+            logger.info(f"Model state offloaded from {source_node_id} to {target_node_id}")
+        except requests.RequestException as e:
+            logger.error(f"Failed to offload model state: {e}")

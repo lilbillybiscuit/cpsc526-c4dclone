@@ -134,6 +134,16 @@ def log_metric():
 def get_dist_env():
     return jsonify(monitor.dist_env_vars)
 
+@app.route('/log_training_time', methods=['POST'])
+def log_training_time():
+    data = request.get_json()
+    training_time = data.get("iteration_time")
+    iteration = data.get("iteration")
+    if training_time is not None:
+        monitor.append_metric("training_time", training_time)
+        return jsonify({"message": "Training time logged", "iteration": iteration}), 200
+    return jsonify({"error": "Invalid data"}), 400
+
 def shutdown_handler(signum, frame):
     print("Shutting down monitor...")
     monitor.stop()

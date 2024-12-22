@@ -3,11 +3,14 @@ import time
 import math
 import pickle
 from contextlib import nullcontext
+import signal
 
 import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+
+from recovery import C4DRecovery
 
 from model import GPTConfig, GPT
 # os.environ["GLOO_SOCKET_IFNAME"]="enp0s6"
@@ -55,17 +58,29 @@ min_lr = 1e-4
 
 # distributed training
 backend = 'gloo'  # Use gloo backend for CPU training
+
+# recovery instance
+recovery = C4DRecovery(os.environ.get("AGENT_URL", "http://monitor:8081")) # TODO change
 # -----------------------------------------------------------------------------
 
+def update_env(signal_number, frame):
+    # Fetch updated environment variables dynamically
+    env_vars = recovery.fetch_env_vars()
+    os.environ.update(env_vars)
+    print("Environment variables updated:", env_vars)
+
+signal.signal(signal.SIGUSR1, update_env)
+
 def setup_distributed():
-    if 'RANK' not in os.environ:
+    # # Initialize distributed training
+    init_process_group(backend=backend)
+    
+    env_vars = recovery.fetch_env_vars()
+    rank = int(env_vars.get('RANK', -1))
+    world_size = int(env_vars.get('WORLD_SIZE', 1))
+    if rank == -1:
         return False, 0, 1, True
     
-    # Initialize distributed training
-    init_process_group(backend=backend)
-    rank = int(os.environ['RANK'])
-    # local_rank = int(os.environ['LOCAL_RANK'])
-    world_size = int(os.environ['WORLD_SIZE'])
     is_master = rank == 0
     
     # Set random seed based on rank
@@ -174,6 +189,7 @@ def train():
     iter_num = start_iter
     best_val_loss = float('inf')
     
+    start_time = time.time()
     while True:
         # Adjust learning rate
         lr = get_lr(iter_num)
@@ -240,6 +256,11 @@ def train():
                             'best_val_loss': best_val_loss,
                         }
                         torch.save(checkpoint, os.path.join(CHECKPOINT_DIR, 'ckpt.pt'))
+                        recovery.report_event(
+                            event_type="training_time", 
+                            details={"iteration_time": time.time() - start_time, "iteration": iter_num}
+                        )
+                        start_time = time.time()
                         print(f"Checkpoint saved at iteration {iter_num}")
             
             model.train()
