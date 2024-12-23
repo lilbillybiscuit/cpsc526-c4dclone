@@ -1,0 +1,6 @@
+pytorch-c4d/.git
+pytorch-c4d/build
+pytorch-c4d/env
+pytorch-c4d/*.pyc
+pytorch-c4d/__pycache__
+pytorch-c4d/.pytest_cache

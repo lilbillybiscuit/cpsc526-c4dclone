@@ -1,4 +1,4 @@
-FROM lilbillybiscuit/pytorch-cpu:latest
+FROM lilbillybiscuit/pytorch-c4d:latest
 
 WORKDIR /app
 COPY ./src .
