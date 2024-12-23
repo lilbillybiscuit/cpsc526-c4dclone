@@ -60,7 +60,7 @@ min_lr = 1e-4
 backend = 'gloo'  # Use gloo backend for CPU training
 
 # recovery instance
-recovery = C4DRecovery(os.environ.get("AGENT_URL", "http://monitor:8081")) # TODO change
+recovery = C4DRecovery(f"http://{os.environ.get('TASK_ID')}.{os.environ.get('NAMESPACE')}:8081")
 # -----------------------------------------------------------------------------
 
 def update_env(signal_number, frame):
@@ -71,8 +71,24 @@ def update_env(signal_number, frame):
 
 signal.signal(signal.SIGUSR1, update_env)
 
+def handle_offload_task(signal_number, frame):
+    print("Received offload request. Loading latest checkpoint...")
+    # Load the latest checkpoint for the current rank
+    checkpoint_path = os.path.join(CHECKPOINT_DIR, f'ckpt_rank{rank}.pt')
+    if os.path.isfile(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        model.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        start_iter = checkpoint.get('iter_num', 0) + 1
+        print(f"Resumed training from checkpoint at iteration {start_iter}")
+    else:
+        print("No checkpoint found for this rank. Starting fresh.")
+
+# offload signal handler
+signal.signal(signal.SIGUSR2, handle_offload_task)
+
 def setup_distributed():
-    # # Initialize distributed training
+    # Initialize distributed training
     init_process_group(backend=backend)
     
     env_vars = recovery.fetch_env_vars()
@@ -176,15 +192,15 @@ def train():
     )
 
     start_iter = 0
-    if os.path.isfile(os.path.join(CHECKPOINT_DIR, 'checkpoint.pt')):
-        checkpoint = torch.load(os.path.join(CHECKPOINT_DIR, 'checkpoint.pt'), map_location='cpu')
-        # Load model and optimizer state
-        gpt_model.load_state_dict(checkpoint['model'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        # Load other variables
-        start_iter = checkpoint.get('iter_num', 0) + 1  # Start from the next iteration
-        best_val_loss = checkpoint.get('best_val_loss', float('inf'))
-        print(f"Resuming training from iteration {start_iter}")
+    # if os.path.isfile(os.path.join(CHECKPOINT_DIR, 'ckpt.pt')):
+    #     checkpoint = torch.load(os.path.join(CHECKPOINT_DIR, 'ckpt.pt'), map_location='cpu')
+    #     # Load model and optimizer state
+    #     gpt_model.load_state_dict(checkpoint['model'])
+    #     optimizer.load_state_dict(checkpoint['optimizer'])
+    #     # Load other variables
+    #     start_iter = checkpoint.get('iter_num', 0) + 1  # Start from the next iteration
+    #     best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+    #     print(f"Resuming training from iteration {start_iter}")
     
     iter_num = start_iter
     best_val_loss = float('inf')

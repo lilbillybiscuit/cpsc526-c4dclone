@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -72,32 +73,129 @@ func (c *C4DServer) CalculateFailureProbabilities() {
 	}
 }
 
-func (c *C4DServer) HandleNodeFailure() {
-	for nodeID, probability := range c.FailureProbabilities {
-		if probability > 0.8 { // Threshold for failure
-			fmt.Printf("Node %s is at high risk of failure. Offloading tasks.\n", nodeID)
+func sendPostRequest(url string, payload map[string]string) error {
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send POST request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("received non-OK response: %s", resp.Status)
+	}
+	fmt.Println("POST request successful:", url)
+	return nil
+}
 
-			// Notify other nodes to handle the workload
-			// Add logic to save the state or checkpoint
-			for id, status := range c.NodeStatuses {
-				if status == "healthy" && id != nodeID {
-					fmt.Printf("Offloading tasks from %s to %s.\n", nodeID, id)
-					// Add task redistribution logic
-				}
-			}
+func (c *C4DServer) HandleNodeFailure() {
+	c.Mutex.Lock()
+	defer c.Mutex.Unlock()
+
+	originalWorldSize := len(c.NodeMetrics)
+
+	failedNodes := []string{}
+
+	// Detect nodes with high failure probabilities or unresponsive nodes
+	for nodeID, probability := range c.FailureProbabilities {
+		if probability > 0.8 || c.NodeStatuses[nodeID] == "unresponsive" {
+			failedNodes = append(failedNodes, nodeID)
+		}
+	}
+
+	for _, nodeID := range failedNodes {
+		// Notify the node that it's being removed
+		go c.NotifyNodeRemoval(nodeID)
+
+		// Remove the node from the system
+		delete(c.NodeMetrics, nodeID)
+		delete(c.NodeStatuses, nodeID)
+		delete(c.FailureProbabilities, nodeID)
+		fmt.Printf("Node %s removed from the system.\n", nodeID)
+	}
+
+	// Update world size and leader
+	activeNodes := []string{}
+	for nodeID, status := range c.NodeStatuses {
+		if status == "active" {
+			activeNodes = append(activeNodes, nodeID)
+		}
+	}
+	worldSize := len(activeNodes)
+	fmt.Printf("Updated world size: %d\n", worldSize)
+
+	if worldSize > 0 {
+		// Assign new leader if needed
+		leaderID := activeNodes[0] // Choose the node with the lowest rank (first in list)
+		c.AssignLeader(leaderID)
+	}
+
+	// Activate standby nodes to replace removed nodes
+	for _, nodeID := range c.GetStandbyNodes() {
+		if worldSize < originalWorldSize {
+			go c.ActivateNode(nodeID)
+			worldSize++
 		}
 	}
 }
 
+// Notify the node that it's being removed
+func (c *C4DServer) NotifyNodeRemoval(nodeID string) {
+	// TODO retrieve actual node url from c.NodeMetrics (this is incorrect and will error)
+	url := fmt.Sprintf("http://%s:8081/remove", nodeID)
+	payload := map[string]string{"reason": "High failure probability or unresponsive"}
+	sendPostRequest(url, payload)
+}
+
+// Assign the new leader
+func (c *C4DServer) AssignLeader(leaderID string) {
+	c.NodeStatuses[leaderID] = "leader"
+	fmt.Printf("Node %s assigned as the new leader.\n", leaderID)
+}
+
+// Activate a standby node
+func (c *C4DServer) ActivateNode(nodeID string) {
+	url := fmt.Sprintf("http://%s:8081/activate", nodeID)
+	payload := map[string]string{"action": "activate"}
+	sendPostRequest(url, payload)
+	c.NodeStatuses[nodeID] = "active"
+	fmt.Printf("Node %s activated from standby.\n", nodeID)
+}
+
+// Get list of standby nodes
+func (c *C4DServer) GetStandbyNodes() []string {
+	standbyNodes := []string{}
+	for nodeID, status := range c.NodeStatuses {
+		if status == "standby" {
+			standbyNodes = append(standbyNodes, nodeID)
+		}
+	}
+	return standbyNodes
+}
+
 func (c *C4DServer) CollectMetrics() {
+	// wait 30 seconds to allow all nodes to register
+	time.Sleep(30 * time.Second)
 	for {
 		c.Mutex.Lock()
 		for nodeID, metrics := range c.NodeMetrics {
-			resp, err := http.Get(fmt.Sprintf("%s/metrics", metrics.NodeURL))
+			client := &http.Client{
+				Timeout: 10 * time.Second,
+			}
+			resp, err := client.Get(fmt.Sprintf("%s/metrics", metrics.NodeURL))
 			if err != nil {
-				c.NodeStatuses[nodeID] = "unresponsive"
-				delete(c.NodeMetrics, nodeID)
-				delete(c.FailureProbabilities, nodeID)
+				fmt.Printf("Node %s is unresponsive at: %s/metrics\n", nodeID, metrics.NodeURL)
+				// c.NodeStatuses[nodeID] = "unresponsive"
+				// delete(c.NodeMetrics, nodeID)
+				// delete(c.FailureProbabilities, nodeID)
 				continue
 			}
 			defer resp.Body.Close()
@@ -117,10 +215,11 @@ func (c *C4DServer) CollectMetrics() {
 			if len(metrics.MemoryUsage) > 10 {
 				metrics.MemoryUsage = metrics.MemoryUsage[len(metrics.MemoryUsage)-10:]
 			}
-			c.NodeStatuses[nodeID] = data["compute_engine_status"].(string)
+			// c.NodeStatuses[nodeID] = data["compute_engine_status"].(string)
 		}
 		c.Mutex.Unlock()
 		c.CalculateFailureProbabilities()
+		c.HandleNodeFailure()
 		time.Sleep(10 * time.Second)
 	}
 }
@@ -162,7 +261,7 @@ func (c *C4DServer) GetAggregatedMetrics() map[string]interface{} {
 
 func main() {
 	c4dServer := NewC4DServer()
-	// go c4dServer.CollectMetrics()
+	go c4dServer.CollectMetrics()
 
 	r := gin.Default()
 
@@ -172,14 +271,16 @@ func main() {
 
 	r.POST("/register", func(c *gin.Context) {
 		var data struct {
-			NodeID  string `json:"node_id"`
-			NodeURL string `json:"node_url"`
+			NodeID     string `json:"node_id"`
+			NodeURL    string `json:"node_url"`
+			NodeStatus string `json:"node_status"`
 		}
 		if err := c.ShouldBindJSON(&data); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid data"})
 			return
 		}
 		c4dServer.RegisterNode(data.NodeID, data.NodeURL)
+		c4dServer.UpdateNodeStatus(data.NodeID, data.NodeStatus)
 		c.JSON(http.StatusOK, gin.H{"message": "Node registered", "node_id": data.NodeID})
 	})
 

@@ -4,6 +4,7 @@ import time
 import threading
 import requests
 import signal
+import random
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)
@@ -16,6 +17,8 @@ class Monitor:
         self.compute_engine_status = "unknown"
         self.metrics = {} # {"key": [values]}
         self.c4d_server_url = os.getenv("C4D_SERVER_URL", "http://c4d-server.central-services:8091")
+        self.is_standby = random.random() < 0.25
+        self.node_status = "active" if not self.is_standby else "standby"
         self.dist_env_vars = {
             "MASTER_ADDR": os.environ.get("MASTER_ADDR"),
             "MASTER_PORT": os.environ.get("MASTER_PORT"),
@@ -47,6 +50,8 @@ class Monitor:
     
     def send_metrics_to_server(self):
         """Periodically sends the metrics log to the C4D server."""
+        response = requests.get(f"{self.c4d_server_url}/", timeout=5)
+        latency = response.elapsed.total_seconds()
         while not self.stop_event.is_set():
             payload = {
                 # "node_id": os.getenv("NODE_ID", "unknown"),
@@ -54,7 +59,7 @@ class Monitor:
                 "metrics": {
                     "cpu_usage": [self.cpu_usage],
                     "ram_usage": [self.ram_usage],
-                    "latency": []  # Add latency if applicable
+                    "latency": [latency]  # Add latency if applicable
                 }
             }
             print(f"Sending payload to C4D server: {payload}")  # Debugging line
@@ -64,16 +69,20 @@ class Monitor:
                     print("Metrics successfully sent to C4D server.")
                 else:
                     print(f"Failed to send metrics to C4D server. Status code: {response.status_code}")
+                latency = response.elapsed.total_seconds()
             except requests.RequestException as e:
                 print(f"Error sending metrics to C4D server: {e}")
             time.sleep(2)
 
     def register_with_server(self):
         """Registers the node with the C4D server."""
+        task_id = os.getenv("TASK_ID", "unknown")
+        namespace = os.getenv("NAMESPACE", "unknown")
         payload = {
             # "node_id": os.getenv("NODE_ID", "unknown"),
-            "node_id": os.getenv("TASK_ID", "unknown"),
-            "node_url": f"http://{os.getenv('HOSTNAME', 'localhost')}:8081"
+            "node_id": task_id,
+            "node_url": f"http://{task_id}.{namespace}:8081",
+            "node_status": self.node_status,
         }
         try:
             response = requests.post(f"{self.c4d_server_url}/register", json=payload, timeout=10)
@@ -101,10 +110,24 @@ class Monitor:
         self.metrics_sender_thread.join()
         print("Monitor stopped.")
 
+def get_node_pid(node_id):
+    """Fetches the PID of the process running the node with the given node_id."""
+    try:
+        response = requests.get(f"http://{node_id}:8081/pid", timeout=5)
+        if response.status_code == 200:
+            return int(response.json().get("pid"))
+        else:
+            print(f"Failed to fetch PID from node {node_id}. Status code: {response.status_code}")
+            return None
+    except requests.RequestException as e:
+        print(f"Error fetching PID from node {node_id}: {e}")
+        return None
+
 # Create a Monitor instance
 monitor = Monitor()
 monitor.register_with_server()
-monitor.start()
+if not monitor.is_standby:
+    monitor.start()
 
 @app.route('/metrics', methods=['GET'])
 def get_metrics():
@@ -112,6 +135,7 @@ def get_metrics():
         "ram_usage": monitor.ram_usage,
         "cpu_usage": monitor.cpu_usage,
         "compute_engine_status": monitor.compute_engine_status,
+        # TODO latency
     })
 
 @app.route('/env', methods=['GET'])
@@ -143,6 +167,43 @@ def log_training_time():
         monitor.append_metric("training_time", training_time)
         return jsonify({"message": "Training time logged", "iteration": iteration}), 200
     return jsonify({"error": "Invalid data"}), 400
+
+@app.route('/offload', methods=['POST'])
+def offload_task():
+    data = request.get_json()
+    target_node_id = data.get("target_node_id")
+    checkpoint_path = data.get("checkpoint_path")
+
+    if not target_node_id or not checkpoint_path:
+        return jsonify({"error": "Invalid offload request"}), 400
+
+    # Notify the target node by sending a signal
+    try:
+        node_pid = get_node_pid(target_node_id)  # Implement a function to fetch node's PID
+        os.kill(node_pid, signal.SIGUSR2)  # Send SIGUSR2 to the target node
+        return jsonify({"message": f"Offload signal sent to node {target_node_id}"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/activate', methods=['POST'])
+def activate_node():
+    monitor.is_standby = False
+    monitor.node_status = "active"
+    monitor.register
+    monitor.start()  # Start sending metrics and running training code
+    return jsonify({"message": "Node activated and ready to participate."}), 200
+
+@app.route('/remove', methods=['POST'])
+def remove_node():
+    monitor.stop()  # Stop sending metrics and participating in training
+    # monitor.is_standby = True
+    # monitor.node_status = "standby"
+    return jsonify({"message": "Node removed from training."}), 200
+
+    
+@app.route('/pid', methods=['GET'])
+def get_pid():
+    return jsonify({"pid": os.getpid()})
 
 def shutdown_handler(signum, frame):
     print("Shutting down monitor...")

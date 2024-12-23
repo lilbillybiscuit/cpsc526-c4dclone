@@ -9,7 +9,7 @@ class C4DRecovery:
     def __init__(self, agent_url):
         """
         Initialize the C4DRecovery library.
-        :param agent_url: Base URL of the C4D agent server (e.g., "http://monitor:8081")
+        :param agent_url: Base URL of the C4D agent server (e.g., "http://compute-job-master-0:8081")
         """
         self.agent_url = agent_url
 
@@ -34,7 +34,7 @@ class C4DRecovery:
         :param event_type: The type of event (e.g., "crash", "warning", "info").
         :param details: A detailed message about the event.
         """
-        payload = {"event_type": event_type, "details": details}
+        payload = {"key": event_type, "value": details}
         try:
             response = requests.post(f"{self.agent_url}/log", json=payload)
             response.raise_for_status()
@@ -69,3 +69,18 @@ class C4DRecovery:
             logger.info(f"Model state offloaded from {source_node_id} to {target_node_id}")
         except requests.RequestException as e:
             logger.error(f"Failed to offload model state: {e}")
+
+    def notify_offload(self, target_node_id, checkpoint_path):
+        """
+        Notify a healthy node to take over a task.
+        :param target_node_id: The ID of the healthy node.
+        :param checkpoint_path: Path to the checkpoint to load.
+        """
+        payload = {"target_node_id": target_node_id, "checkpoint_path": checkpoint_path}
+        try:
+            response = requests.post(f"{self.agent_url}/offload", json=payload)
+            response.raise_for_status()
+            logger.info(f"Offload request sent to node {target_node_id}.")
+        except requests.RequestException as e:
+            logger.error(f"Failed to notify offload: {e}")
+
