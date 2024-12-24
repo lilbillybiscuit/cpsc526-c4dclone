@@ -17,7 +17,7 @@ spec:
             - name: pytorch
               image: lilbillybiscuit/compute-engine:latest  # Use your compute-engine image
               imagePullPolicy: IfNotPresent
-              command: ["python", "train.py"]
+#              command: ["python", "train.py"]
               ports:
                 - name: pytorch
                   containerPort: 8080
@@ -112,7 +112,7 @@ spec:
             - name: pytorch
               image: lilbillybiscuit/compute-engine:latest # Use your compute-engine image
               imagePullPolicy: IfNotPresent
-              command: ["python", "train.py"]
+#              command: ["python", "train.py"]
               ports:
                 - name: pytorch
                   containerPort: 8080

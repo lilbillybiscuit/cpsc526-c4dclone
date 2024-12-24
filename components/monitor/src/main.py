@@ -212,6 +212,18 @@ def log_ccl():
         data["endTime"] = int(data["endTime"])
         data["finished"] = bool(data["finished"])
     else:
+        # json.field("opType", opType)
+        # .field("algorithm", algorithm)
+        # .field("dataType", dataType)
+        # .field("count", count)
+        # .field("rootRank", rootRank)
+        # .field("context_rank", rank_)
+        # .field("context_size", size_)
+        # .field("startTime", std::chrono::duration_cast < std::chrono::microseconds > (
+        #     startTime.time_since_epoch()).count())
+        # .field("endTime", std::chrono::duration_cast < std::chrono::microseconds > (endTime.time_since_epoch()).count())
+        # .field("filename", filename)
+        # .field("finished", finished);
         data["count"] = int(data["count"])
         data["root_rank"] = int(data["rootRank"])
         data["context_rank"] = int(data["context_rank"])

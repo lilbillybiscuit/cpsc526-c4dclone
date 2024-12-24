@@ -1,8 +1,18 @@
-FROM lilbillybiscuit/pytorch-c4d:latest
+FROM rust:1.83-bookworm AS builder
 
 WORKDIR /app
-COPY ./src .
+COPY . .
+
+RUN cargo build --release --target-dir /tmp/build && \
+    cp /tmp/build/release/compute-engine /usr/bin/compute-engine
+
+FROM lilbillybiscuit/pytorch-c4d:latest
+COPY --from=builder /usr/bin/compute-engine /usr/bin/compute-engine
+
+WORKDIR /app
+COPY user_code .
 
 RUN pip install -r requirements.txt
+EXPOSE 8080
 
-CMD ["python3", "train.py"]
+CMD ["/usr/bin/compute-engine"]
