@@ -237,7 +237,17 @@ async fn main() -> std::io::Result<()> {
         script_process: Mutex::new(None),
     });
 
-    env_logger::init();
+    match TokioCommand::new("/bin/sh").arg("launch.sh").spawn() {
+        Ok(child) => {
+            let pid = child.id();
+            println!("Started initial process with PID: {:?}", pid);
+            let mut process_guard = app_state.script_process.lock().unwrap();
+            *process_guard = Some(child);
+        }
+        Err(e) => {
+            panic!("Failed to start initial process: {}", e);
+        }
+    };
 
     println!("Starting server at http://0.0.0.0:8080");
     let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
@@ -251,7 +261,7 @@ async fn main() -> std::io::Result<()> {
             .route("/metrics", web::get().to(get_metrics))
             .route("/restart", web::post().to(restart_script))
     })
-        .bind("0.0.0.0:8080")?
+        .bind(format!("0.0.0.0:{}", port))?
         .run()
         .await
 }
