@@ -111,6 +111,11 @@ func (c *C4DServer) HandleNodeFailure() {
 		}
 	}
 
+	if len(failedNodes) == 0 {
+		fmt.Printf("No failed nodes detected.\n")
+		return
+	}
+
 	for _, nodeID := range failedNodes {
 		// Notify the node that it's being removed
 		go c.NotifyNodeRemoval(nodeID)
