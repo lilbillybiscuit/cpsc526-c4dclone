@@ -1,10 +1,12 @@
 FROM rust:1.83-bookworm AS builder
 
 WORKDIR /app
-COPY . .
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
 
 RUN cargo build --release --target-dir /tmp/build && \
     cp /tmp/build/release/compute-engine /usr/bin/compute-engine
+
 
 FROM lilbillybiscuit/pytorch-c4d:latest
 COPY --from=builder /usr/bin/compute-engine /usr/bin/compute-engine

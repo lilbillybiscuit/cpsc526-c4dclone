@@ -1,0 +1,151 @@
+syntax = "proto3";
+
+package c4d;
+
+option go_package = "./;c4d";
+
+message CCLOperation {
+  string op_type = 1;
+  string algorithm = 2;
+  string data_type = 3;
+  int64 count = 4;
+  int64 root_rank = 5;
+  int64 context_rank = 6;
+  int64 context_size = 7;
+  int64 start_time = 8;
+  int64 end_time = 9;
+  string filename = 10;
+  bool finished = 11;
+  int64 remote_rank = 12;
+  int64 bytes = 13;
+  double timestamp = 14;
+}
+
+message CCLLogGroup {
+  string op_type = 1;
+  repeated CCLOperation logs = 2;
+}
+
+message RankLatencies {
+  int32 rank = 1;
+  map<int32, double> avg_latencies = 2;  // remoteRank -> averaged latency
+}
+
+message NodeStatus {
+  bool is_alive = 1;
+  int64 process_id = 2;
+}
+
+message Metrics {
+  double ram_usage = 1;
+  double cpu_usage = 2;
+  RankLatencies rank_latencies = 3;
+}
+
+
+message AgentStatus {
+  string current_status = 1;
+  int64 current_pid = 2;
+  ProcessExecution last_execution = 3;
+}
+
+message ProcessExecution {
+  int64 start_time = 1;
+  int64 end_time = 2;
+  int32 exit_code = 3;
+  string exit_signal = 4;
+  int64 pid = 5;
+  map<string, string> env_vars = 6;
+  string script_path = 7;
+}
+
+message AgentMetrics {
+  int64 timestamp = 1;
+  SystemMetrics system_metrics = 2;
+  ProcessMetrics process_metrics = 3;
+  DerivedMetrics derived_metrics = 4;
+}
+
+message SystemMetrics {
+  double system_cpu_usage = 1;
+  int64 system_memory_total_bytes = 2;
+  int64 system_memory_used_bytes = 3;
+  int64 system_memory_free_bytes = 4;
+  int64 system_memory_available_bytes = 5;
+  int64 system_swap_total_bytes = 6;
+  int64 system_swap_used_bytes = 7;
+  int64 system_swap_free_bytes = 8;
+  double system_load_average_1m = 9;
+  double system_load_average_5m = 10;
+  double system_load_average_15m = 11;
+  int64 system_uptime_secs = 12;
+  int32 total_processes = 13;
+  int32 cpu_cores = 14;
+  int32 cpu_threads = 15;
+}
+
+message ProcessMetrics {
+  int64 pid = 1;
+  double cpu_usage = 2;
+  int64 memory_bytes = 3;
+  int64 virtual_memory_bytes = 4;
+  int64 run_time_secs = 5;
+  int64 disk_read_bytes = 6;
+  int64 disk_written_bytes = 7;
+  int32 threads = 8;
+  string status = 9;
+  string name = 10;
+  int64 parent_pid = 11;
+}
+
+message DerivedMetrics {
+  double memory_usage_percent = 1;
+  double swap_usage_percent = 2;
+  double memory_available_percent = 3;
+}
+
+message RegisterRequest {
+  string node_id = 1;
+  string node_url = 2;
+  string node_status = 3;
+}
+
+message RegisterResponse {
+  string message = 1;
+  string node_id = 2;
+}
+
+
+
+message MetricsRequest {
+  string node_id = 1;
+  Metrics metrics = 2;
+  NodeStatus status = 3;
+}
+
+message MetricsResponse {
+  string message = 1;
+}
+
+message NodeMetrics {
+  repeated double latency = 1;
+  repeated double memory_usage = 2;
+  string node_url = 3;
+  map<string, CCLLogGroup> ccl_logs = 4;
+}
+
+message AggregatedMetrics {
+  int32 total_nodes = 1;
+  double average_latency = 2;
+  double average_memory_usage = 3;
+  map<string, double> failure_probabilities = 4;
+}
+
+message FailureProbabilities {
+  map<string, double> failure_probabilities = 1;
+}
+
+service C4DService {
+  rpc Register (RegisterRequest) returns (RegisterResponse) {}
+  rpc SendMetrics (MetricsRequest) returns (MetricsResponse) {}
+}

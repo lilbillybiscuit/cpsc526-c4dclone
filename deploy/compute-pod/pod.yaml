@@ -86,6 +86,10 @@ spec:
                       fieldPath: metadata.name
                 - name: FAILURE_SERVER_URL
                   value: http://failure-server:8092
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
               resources:
                 requests:
                   memory: "64Mi"
@@ -93,6 +97,23 @@ spec:
                 limits:
                   memory: "128Mi"
                   cpu: "200m"
+
+            - name: test
+              image: ubuntu:22.04
+              imagePullPolicy: IfNotPresent
+              command: [ "tail", "-f", "/dev/null" ]
+              env:
+                - name: TASK_ID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: FAILURE_SERVER_URL
+                  value: http://failure-server:8092
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+
           volumes:
             - name: shared-memory
               emptyDir:

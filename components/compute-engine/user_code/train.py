@@ -290,6 +290,6 @@ def train():
 
 if __name__ == '__main__':
     # print out all environment variables and configuration
-    import pprint
-    pprint.pprint(dict(os.environ))
+#     import pprint
+#     pprint.pprint(dict(os.environ))
     train()
