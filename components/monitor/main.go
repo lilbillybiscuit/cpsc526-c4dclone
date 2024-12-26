@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"google.golang.org/grpc/keepalive"
 	"io"
 	"net/http"
 	"os"
@@ -18,71 +17,384 @@ import (
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 
-	"monitor/proto" // Update with your module name
+	"monitor/proto"
 )
 
-// Constants for agent communication
 const (
-	agentBaseURL  = "http://localhost:8080"
-	serverBaseURL = "localhost:8091"
+	serverBaseURL           = "localhost:8091"
+	windowSize              = 100 // Size of latency sliding window
+	completionCheckInterval = 5 * time.Second
 )
 
-type CCLLog struct {
-	OpType      string  `json:"opType"`
-	Algorithm   string  `json:"algorithm,omitempty"`
-	DataType    string  `json:"dataType,omitempty"`
-	Count       int64   `json:"count,omitempty"`
-	RootRank    int64   `json:"rootRank,omitempty"`
-	ContextRank int64   `json:"context_rank"`
-	ContextSize int64   `json:"context_size"`
-	StartTime   int64   `json:"startTime"`
-	EndTime     int64   `json:"endTime"`
-	Filename    string  `json:"filename"`
-	Finished    bool    `json:"finished"`
-	RemoteRank  int64   `json:"remoteRank,omitempty"`
-	Bytes       int64   `json:"bytes,omitempty"`
-	Timestamp   float64 `json:"timestamp"`
+type AgentStatus struct {
+	CurrentStatus string `json:"current_status"`
+	CurrentPID    int64  `json:"current_pid"`
+	LastExecution struct {
+		StartTime  int64             `json:"start_time"`
+		EndTime    *int64            `json:"end_time"`
+		ExitCode   *int              `json:"exit_code"`
+		ExitSignal *string           `json:"exit_signal"`
+		PID        int64             `json:"pid"`
+		EnvVars    map[string]string `json:"env_vars"`
+		ScriptPath string            `json:"script_path"`
+	} `json:"last_execution"`
 }
 
-type LatencyStats struct {
-	AverageLatency float64
-	LatencyCount   int64
-	LastUpdate     time.Time
+type AgentMetrics struct {
+	Timestamp int64 `json:"timestamp"`
+	Metrics   struct {
+		SystemCPUUsage             float64 `json:"system_cpu_usage"`
+		SystemMemoryTotalBytes     int64   `json:"system_memory_total_bytes"`
+		SystemMemoryUsedBytes      int64   `json:"system_memory_used_bytes"`
+		SystemMemoryFreeBytes      int64   `json:"system_memory_free_bytes"`
+		SystemMemoryAvailableBytes int64   `json:"system_memory_available_bytes"`
+		ProcessMetrics             *struct {
+			PID         int64   `json:"pid"`
+			CPUUsage    float64 `json:"cpu_usage"`
+			MemoryBytes int64   `json:"memory_bytes"`
+			RunTimeSecs int64   `json:"run_time_secs"`
+			Status      string  `json:"status"`
+		} `json:"process_metrics"`
+	} `json:"metrics"`
 }
-
-// Monitor struct to hold the state of the monitoring client
 type Monitor struct {
-	stopEvent           chan bool
-	ramUsage            float64
-	cpuUsage            float64
-	computeEngineStatus string
-	metrics             *c4d.Metrics
-	c4dServerURL        string
-	isStandby           bool
-	nodeStatus          string
-	distEnvVars         map[string]string
-	cclLogs             []*c4d.CCLLogGroup
-	cclLock             sync.Mutex
-	nodeURL             string
-	agentMetrics        *c4d.AgentMetrics
-	agentStatus         *c4d.AgentStatus
-	grpcClient          c4d.C4DServiceClient
-	rank                int
-	worldSize           int
-	activeNodes         map[string]NodeInfo // nodeID -> NodeInfo
-	rankMutex           sync.RWMutex
+	// Essential state
+	nodeID    string
+	nodeURL   string
+	rank      int
+	worldSize int
+	isStandby bool
 
-	//latencyStats  LatencyStats
-	latencyWindow map[int][]float64 // Rolling window of recent latencies
-	windowSize    int               // Size of rolling window for latency calculation
-	latencyMutex  sync.RWMutex
+	// Metrics tracking
+	latencyWindow map[int][]float64 // remoteRank -> latency window
+	cpuUsage      float64
+	ramUsage      float64
+
+	// Synchronization
+	stopChan     chan struct{}
+	latencyMutex sync.RWMutex
+	rankMutex    sync.RWMutex
+
+	// Communication
+	grpcClient      c4d.C4DServiceClient
+	isCompleted     bool
+	completionMutex sync.RWMutex
 }
 
-type NodeInfo struct {
-	Rank   int    `json:"rank"`
-	URL    string `json:"url"`
-	NodeID string `json:"node_id"`
+func (m *Monitor) checkCompletion() error {
+	var status AgentStatus
+	if err := m.callAgentEndpoint("GET", "/status", nil, &status); err != nil {
+		return fmt.Errorf("failed to check completion status: %w", err)
+	}
+
+	// Check if process has completed successfully
+	if status.LastExecution.ExitCode != nil && *status.LastExecution.ExitCode == 0 {
+		m.completionMutex.Lock()
+		m.isCompleted = true
+		m.completionMutex.Unlock()
+
+		// Notify server of successful completion
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		req := &c4d.MetricsRequest{
+			NodeId: m.nodeID,
+			Status: &c4d.NodeStatus{
+				IsAlive:               false,
+				ProcessId:             status.LastExecution.PID,
+				ExitCode:              int32(*status.LastExecution.ExitCode),
+				CompletedSuccessfully: true,
+			},
+		}
+
+		_, err := m.grpcClient.SendMetrics(ctx, req)
+		if err != nil {
+			return fmt.Errorf("failed to send completion status: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func NewMonitor() (*Monitor, error) {
+	taskID := os.Getenv("TASK_ID")
+	namespace := os.Getenv("NAMESPACE")
+	port := os.Getenv("PORT")
+	// if port not set, default to 8081
+	if port == "" {
+		port = "8081"
+	}
+	nodeURL := fmt.Sprintf("http://%s.%s:%s", taskID, namespace, port)
+
+	var conn *grpc.ClientConn
+
+	for {
+		var err error
+		conn, err = grpc.NewClient(serverBaseURL,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithKeepaliveParams(keepalive.ClientParameters{
+				Time:                10 * time.Second,
+				Timeout:             5 * time.Second,
+				PermitWithoutStream: true,
+			}))
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to server: %v", err)
+		} else if conn != nil {
+			break
+		}
+	}
+
+	rank, _ := strconv.Atoi(os.Getenv("RANK"))
+	worldSize, _ := strconv.Atoi(os.Getenv("WORLD_SIZE"))
+
+	return &Monitor{
+		nodeID:        taskID + "." + port,
+		nodeURL:       nodeURL,
+		rank:          rank,
+		worldSize:     worldSize,
+		isStandby:     false,
+		latencyWindow: make(map[int][]float64),
+		stopChan:      make(chan struct{}),
+		grpcClient:    c4d.NewC4DServiceClient(conn),
+		isCompleted:   false,
+	}, nil
+}
+
+// -- Agent Methods
+
+func (m *Monitor) updateLatencyWindow(remoteRank int, latency float64) float64 {
+	m.latencyMutex.Lock()
+	defer m.latencyMutex.Unlock()
+
+	if _, exists := m.latencyWindow[remoteRank]; !exists {
+		m.latencyWindow[remoteRank] = make([]float64, 0, windowSize)
+	}
+
+	window := m.latencyWindow[remoteRank]
+	window = append(window, latency)
+	if len(window) > windowSize {
+		window = window[1:]
+	}
+	m.latencyWindow[remoteRank] = window
+
+	// Calculate average
+	var sum float64
+	for _, l := range window {
+		sum += l
+	}
+	return sum / float64(len(window))
+}
+
+func (m *Monitor) startAgent(envVars map[string]string) error {
+	payload := map[string]interface{}{
+		"env_vars": envVars,
+	}
+
+	var agentStatus AgentStatus
+	if err := m.callAgentEndpoint("POST", "/start", payload, &agentStatus); err != nil {
+		return fmt.Errorf("failed to start agent: %w", err)
+	}
+
+	fmt.Printf("Agent started with PID %d\n", agentStatus.CurrentPID)
+	return nil
+}
+
+func (m *Monitor) stopAgent() error {
+	var agentStatus AgentStatus
+	if err := m.callAgentEndpoint("POST", "/stop", nil, &agentStatus); err != nil {
+		return fmt.Errorf("failed to stop agent: %w", err)
+	}
+
+	fmt.Printf("Agent stopped. Last PID: %d\n", agentStatus.LastExecution.PID)
+	return nil
+}
+
+func (m *Monitor) restartAgent(envVars map[string]string) error {
+	payload := map[string]interface{}{
+		"env_vars": envVars,
+	}
+
+	var agentStatus AgentStatus
+	if err := m.callAgentEndpoint("POST", "/restart", payload, &agentStatus); err != nil {
+		return fmt.Errorf("failed to restart agent: %w", err)
+	}
+
+	fmt.Printf("Agent restarted with PID %d\n", agentStatus.CurrentPID)
+	return nil
+}
+
+func (m *Monitor) fetchAgentMetrics() error {
+	var metrics AgentMetrics
+	if err := m.callAgentEndpoint("GET", "/metrics", nil, &metrics); err != nil {
+		return fmt.Errorf("failed to fetch metrics: %w", err)
+	}
+
+	if metrics.Metrics.ProcessMetrics != nil {
+		m.cpuUsage = metrics.Metrics.ProcessMetrics.CPUUsage
+		m.ramUsage = float64(metrics.Metrics.ProcessMetrics.MemoryBytes)
+	}
+
+	return nil
+}
+
+func (m *Monitor) fetchAgentStatus() error {
+	var status AgentStatus
+	if err := m.callAgentEndpoint("GET", "/status", nil, &status); err != nil {
+		return fmt.Errorf("failed to fetch status: %w", err)
+	}
+
+	return nil
+}
+
+func (m *Monitor) callAgentEndpoint(method, endpoint string, payload interface{}, result interface{}) error {
+	url := fmt.Sprintf("http://localhost:8080%s", endpoint)
+
+	var body io.Reader
+	if payload != nil {
+		jsonData, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("failed to marshal payload: %w", err)
+		}
+		body = bytes.NewReader(jsonData)
+	}
+
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("agent returned error status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	if result != nil {
+		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+			return fmt.Errorf("failed to decode response: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (m *Monitor) handleLogCCL(c *gin.Context) {
+	var log struct {
+		OpType      string `json:"opType"`
+		ContextRank int64  `json:"context_rank"`
+		RemoteRank  int64  `json:"remoteRank"`
+		StartTime   int64  `json:"startTime"`
+		EndTime     int64  `json:"endTime"`
+		Finished    bool   `json:"finished"`
+	}
+
+	if err := c.ShouldBindJSON(&log); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid data"})
+		return
+	}
+
+	if log.Finished && (log.OpType == "send" || log.OpType == "recv") {
+		latency := float64(log.EndTime-log.StartTime) / 1000000
+		m.updateLatencyWindow(int(log.RemoteRank), latency)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Processed"})
+}
+
+func (m *Monitor) sendMetrics() {
+	metricsTicker := time.NewTicker(time.Second)
+	completionTicker := time.NewTicker(completionCheckInterval)
+	defer metricsTicker.Stop()
+	defer completionTicker.Stop()
+
+	for {
+		select {
+		case <-m.stopChan:
+			return
+		case <-metricsTicker.C:
+			m.completionMutex.RLock()
+			if !m.isCompleted {
+				m.sendMetricsToServer()
+			}
+			m.completionMutex.RUnlock()
+		case <-completionTicker.C:
+			if err := m.checkCompletion(); err != nil {
+				fmt.Printf("Failed to check completion status: %v\n", err)
+			}
+
+			// If completed, stop sending metrics
+			m.completionMutex.RLock()
+			if m.isCompleted {
+				m.completionMutex.RUnlock()
+				return
+			}
+			m.completionMutex.RUnlock()
+		}
+	}
+}
+
+func (m *Monitor) sendMetricsToServer() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Fetch current agent status
+	var agentStatus AgentStatus
+	if err := m.callAgentEndpoint("GET", "/status", nil, &agentStatus); err != nil {
+		fmt.Printf("Failed to fetch agent status: %v\n", err)
+		return
+	}
+
+	m.latencyMutex.RLock()
+	avgLatencies := make(map[int32]float64)
+	for remoteRank, window := range m.latencyWindow {
+		if len(window) > 0 {
+			var sum float64
+			for _, l := range window {
+				sum += l
+			}
+			avg := sum / float64(len(window))
+			avgLatencies[int32(remoteRank)] = avg
+		}
+	}
+	m.latencyMutex.RUnlock()
+
+	req := &c4d.MetricsRequest{
+		NodeId: m.nodeID,
+		Metrics: &c4d.Metrics{
+			RamUsage: m.ramUsage,
+			CpuUsage: m.cpuUsage,
+			RankLatencies: &c4d.RankLatencies{
+				Rank:         int32(m.rank),
+				AvgLatencies: avgLatencies,
+			},
+		},
+		Status: &c4d.NodeStatus{
+			IsAlive:   true,
+			ProcessId: agentStatus.CurrentPID,
+		},
+	}
+
+	// Include exit information if available
+	if agentStatus.LastExecution.ExitCode != nil {
+		req.Status.ExitCode = int32(*agentStatus.LastExecution.ExitCode)
+		req.Status.CompletedSuccessfully = *agentStatus.LastExecution.ExitCode == 0
+	}
+
+	_, err := m.grpcClient.SendMetrics(ctx, req)
+	if err != nil {
+		fmt.Printf("Failed to send metrics: %v\n", err)
+	}
 }
 
 type RestartConfig struct {
@@ -91,521 +403,143 @@ type RestartConfig struct {
 	ActiveNodes []map[string]interface{} `json:"active_nodes"`
 }
 
-type RankLatencies struct {
-	Rank         int32
-	AvgLatencies map[int32]float64 // remoteRank -> averaged latency
-}
-
-func NewMonitor() (*Monitor, error) {
-	taskID := os.Getenv("TASK_ID")
-	namespace := os.Getenv("NAMESPACE")
-	nodeURL := fmt.Sprintf("http://%s.%s:8081", taskID, namespace)
-
-	// Setup gRPC connection with modern options
-	var conn *grpc.ClientConn
-	var err error
-	maxRetries := 3
-
-	for retry := 0; retry < maxRetries; retry++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-
-		opts := []grpc.DialOption{
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-			grpc.WithBlock(),
-			grpc.WithDefaultServiceConfig(`{
-                "loadBalancingPolicy": "round_robin",
-                "healthCheckConfig": {
-                    "serviceName": ""
-                }
-            }`),
-			grpc.WithKeepaliveParams(keepalive.ClientParameters{
-				Time:                10 * time.Second,
-				Timeout:             5 * time.Second,
-				PermitWithoutStream: true,
-			}),
-		}
-
-		conn, err = grpc.DialContext(ctx, serverBaseURL, opts...)
-		cancel()
-
-		if err != nil {
-			if retry == maxRetries-1 {
-				return nil, fmt.Errorf("failed to connect to gRPC server after %d retries: %v", maxRetries, err)
-			}
-			time.Sleep(time.Second * time.Duration(retry+1))
-			continue
-		}
-		break
-	}
-	initialRank, err := strconv.Atoi(os.Getenv("RANK"))
-	if err != nil {
-		initialRank = -1 // Invalid rank until properly assigned
-	}
-
-	initialWorldSize, err := strconv.Atoi(os.Getenv("WORLD_SIZE"))
-	if err != nil {
-		initialWorldSize = 0 // Invalid world size until properly assigned
-	}
-
-	monitor := &Monitor{
-		stopEvent:    make(chan bool),
-		ramUsage:     0,
-		cpuUsage:     0,
-		metrics:      &c4d.Metrics{},
-		c4dServerURL: serverBaseURL,
-		isStandby:    false,
-		nodeStatus:   "active",
-		distEnvVars: map[string]string{
-			"MASTER_ADDR": os.Getenv("MASTER_ADDR"),
-			"MASTER_PORT": os.Getenv("MASTER_PORT"),
-			"WORLD_SIZE":  os.Getenv("WORLD_SIZE"),
-			"RANK":        os.Getenv("RANK"),
-			"TASK_ID":     taskID,
-		},
-		cclLogs:       make([]*c4d.CCLLogGroup, 0),
-		nodeURL:       nodeURL,
-		agentMetrics:  &c4d.AgentMetrics{},
-		agentStatus:   &c4d.AgentStatus{},
-		grpcClient:    c4d.NewC4DServiceClient(conn),
-		rank:          initialRank,
-		worldSize:     initialWorldSize,
-		activeNodes:   make(map[string]NodeInfo),
-		latencyWindow: make(map[int][]float64),
-		windowSize:    100,
-	}
-
-	return monitor, nil
-}
-
-// --- CCL Log Handling ---
-
-func (m *Monitor) AppendCCLLog(log *c4d.CCLLogGroup) {
-	m.cclLock.Lock()
-	defer m.cclLock.Unlock()
-	m.cclLogs = append(m.cclLogs, log)
-}
-
-func (m *Monitor) GetAndClearCCLLogs() []*c4d.CCLLogGroup {
-	m.cclLock.Lock()
-	defer m.cclLock.Unlock()
-	logs := make([]*c4d.CCLLogGroup, len(m.cclLogs))
-	copy(logs, m.cclLogs)
-	m.cclLogs = []*c4d.CCLLogGroup{}
-	return logs
-}
-
-// --- Agent Interaction ---
-
-func (m *Monitor) callAgentEndpoint(endpoint string, method string, payload interface{}) (interface{}, error) {
-	url := fmt.Sprintf("%s%s", agentBaseURL, endpoint)
-
-	var reqBody io.Reader
-	if payload != nil {
-		jsonData, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal payload: %w", err)
-		}
-		reqBody = bytes.NewReader(jsonData)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			MaxIdleConns:       100,
-			IdleConnTimeout:    90 * time.Second,
-			DisableCompression: true,
-			ForceAttemptHTTP2:  true,
-		},
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call agent endpoint: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("agent responded with error: %s, body: %s", resp.Status, bodyBytes)
-	}
-
-	var result interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode agent response: %w", err)
-	}
-
-	return result, nil
-}
-
-func (m *Monitor) fetchAgentMetrics() error {
-	// TODO: this is actually broken, need to fix
-	rawMetrics, err := m.callAgentEndpoint("/metrics", "GET", nil)
-	if err != nil {
-		return fmt.Errorf("error fetching metrics from agent: %w", err)
-	}
-
-	metricsMap, ok := rawMetrics.(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("unexpected format for agent metrics")
-	}
-
-	metricsJSON, err := json.Marshal(metricsMap)
-	if err != nil {
-		return fmt.Errorf("failed to marshal agent metrics to JSON: %w", err)
-	}
-
-	var agentMetrics c4d.AgentMetrics
-	if err := json.Unmarshal(metricsJSON, &agentMetrics); err != nil {
-		return fmt.Errorf("failed to unmarshal agent metrics from JSON: %w", err)
-	}
-
-	m.agentMetrics = &agentMetrics
-	return nil
-}
-
-func (m *Monitor) fetchAgentStatus() error {
-	rawStatus, err := m.callAgentEndpoint("/status", "GET", nil)
-	if err != nil {
-		return fmt.Errorf("error fetching status from agent: %w", err)
-	}
-
-	statusMap, ok := rawStatus.(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("unexpected format for agent status")
-	}
-
-	statusJSON, err := json.Marshal(statusMap)
-	if err != nil {
-		return fmt.Errorf("failed to marshal agent status to JSON: %w", err)
-	}
-
-	var agentStatus c4d.AgentStatus
-	if err := json.Unmarshal(statusJSON, &agentStatus); err != nil {
-		return fmt.Errorf("failed to unmarshal agent status from JSON: %w", err)
-	}
-
-	m.agentStatus = &agentStatus
-	return nil
-}
-
-func (m *Monitor) startAgent(envVars map[string]string, scriptPath string) error {
-	payload := map[string]interface{}{"env_vars": envVars}
-	_, err := m.callAgentEndpoint("/start", "POST", payload)
-	return err
-}
-
-func (m *Monitor) stopAgent() error {
-	_, err := m.callAgentEndpoint("/stop", "POST", nil)
-	return err
-}
-
-func (m *Monitor) restartAgent(envVars map[string]string, scriptPath string) error {
-	payload := map[string]interface{}{
-		"env_vars":    envVars,
-		"script_path": scriptPath,
-	}
-	_, err := m.callAgentEndpoint("/restart", "POST", payload)
-	return err
-}
-
-// --- Metrics and Status ---
-
-func (m *Monitor) UpdateMetrics() {
-	for {
-		select {
-		case <-m.stopEvent:
-			return
-		default:
-			if err := m.fetchAgentMetrics(); err != nil {
-				fmt.Printf("Failed to fetch agent metrics: %v\n", err)
-			}
-			if err := m.fetchAgentStatus(); err != nil {
-				fmt.Printf("Failed to fetch agent status: %v\n", err)
-			}
-
-			if m.agentMetrics != nil && m.agentMetrics.SystemMetrics != nil {
-				m.ramUsage = float64(m.agentMetrics.SystemMetrics.SystemMemoryUsedBytes)
-				m.cpuUsage = m.agentMetrics.SystemMetrics.SystemCpuUsage
-			}
-
-			if m.agentStatus != nil {
-				m.computeEngineStatus = m.agentStatus.CurrentStatus
-			}
-
-			time.Sleep(1 * time.Second)
-		}
-	}
-}
-
-// --- Server Communication (gRPC) ---
-func (m *Monitor) SendMetricsAndCCLLogsToServer() {
-	for {
-		select {
-		case <-m.stopEvent:
-			return
-		default:
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			m.rankMutex.RLock()
-			currentRank := m.rank
-			m.rankMutex.RUnlock()
-
-			// Get averaged latencies
-			m.latencyMutex.RLock()
-			avgLatencies := make(map[int32]float64)
-			for remoteRank, latencies := range m.latencyWindow {
-				if len(latencies) > 0 {
-					var sum float64
-					for _, l := range latencies {
-						sum += l
-					}
-					avgLatencies[int32(remoteRank)] = sum / float64(len(latencies))
-				}
-			}
-			m.latencyMutex.RUnlock()
-
-			// Only send essential metrics
-			req := &c4d.MetricsRequest{
-				NodeId: os.Getenv("TASK_ID"),
-				Metrics: &c4d.Metrics{
-					RamUsage: m.ramUsage,
-					CpuUsage: m.cpuUsage,
-					// Only send averaged latencies
-					RankLatencies: &c4d.RankLatencies{
-						Rank:         int32(currentRank),
-						AvgLatencies: avgLatencies,
-					},
-				},
-				// Only send critical status info
-				Status: &c4d.NodeStatus{
-					IsAlive:   m.agentStatus != nil && m.agentStatus.CurrentStatus == "running",
-					ProcessId: m.agentStatus.CurrentPid,
-				},
-			}
-
-			maxRetries := 3
-			for retry := 0; retry < maxRetries; retry++ {
-				resp, err := m.grpcClient.SendMetrics(ctx, req)
-				if err != nil {
-					if retry == maxRetries-1 {
-						fmt.Printf("Failed to send metrics after %d retries: %v\n", maxRetries, err)
-					}
-					time.Sleep(time.Second * time.Duration(retry+1))
-					continue
-				}
-				fmt.Printf("Metrics sent successfully. Message: %s\n", resp.Message)
-				break
-			}
-
-			time.Sleep(1 * time.Second)
-		}
-	}
-}
-
-func (m *Monitor) RegisterWithServer() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	req := &c4d.RegisterRequest{
-		NodeId:     os.Getenv("TASK_ID"),
-		NodeUrl:    m.nodeURL,
-		NodeStatus: m.nodeStatus,
-	}
-
-	// Implement retry logic for registration
-	maxRetries := 3
-	for retry := 0; retry < maxRetries; retry++ {
-		resp, err := m.grpcClient.Register(ctx, req)
-		if err != nil {
-			if retry == maxRetries-1 {
-				return fmt.Errorf("failed to register after %d retries: %v", maxRetries, err)
-			}
-			time.Sleep(time.Second * time.Duration(retry+1))
-			continue
-		}
-		fmt.Printf("Registration successful: %s\n", resp.Message)
-		return nil
-	}
-	return nil
-}
-
 func (m *Monitor) handleRestart(c *gin.Context) {
 	var config RestartConfig
 	if err := c.ShouldBindJSON(&config); err != nil {
-		fmt.Printf("Error binding restart config: %v\n", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid config: %v", err)})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid config"})
 		return
 	}
-	fmt.Printf("Received restart config: %+v\n", config)
 
 	m.rankMutex.Lock()
-	defer m.rankMutex.Unlock()
-
-	// Store old configuration for logging
-	oldRank := m.rank
-	oldWorldSize := m.worldSize
-
-	// Update configuration
 	m.rank = config.NewRank
 	m.worldSize = config.WorldSize
+	m.rankMutex.Unlock()
 
-	// Update active nodes
-	m.activeNodes = make(map[string]NodeInfo)
-	for _, nodeData := range config.ActiveNodes {
-		nodeInfo := NodeInfo{
-			Rank:   nodeData["rank"].(int),
-			URL:    nodeData["url"].(string),
-			NodeID: nodeData["node_id"].(string),
-		}
-		m.activeNodes[nodeInfo.NodeID] = nodeInfo
-	}
-
-	// Log configuration change
-	fmt.Printf("Configuration updated: rank %d -> %d, world size %d -> %d\n",
-		oldRank, m.rank, oldWorldSize, m.worldSize)
-
-	// Stop current agent
-	if err := m.stopAgent(); err != nil {
-		fmt.Printf("Error stopping agent: %v\n", err)
-	}
-
-	// Update environment variables for the new configuration
-	m.distEnvVars["RANK"] = fmt.Sprintf("%d", m.rank)
-	m.distEnvVars["WORLD_SIZE"] = fmt.Sprintf("%d", m.worldSize)
-
-	// Restart agent with new configuration
-	if err := m.restartAgent(m.distEnvVars, "launch.sh"); err != nil {
-		fmt.Printf("Error restarting agent: %v\n", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to restart agent"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Restart completed successfully"})
-}
-
-// --- Lifecycle Management ---
-
-func (m *Monitor) Start() {
-	// Start the agent with initial settings
-	initialEnvVars := map[string]string{}
-	if err := m.startAgent(initialEnvVars, "launch.sh"); err != nil {
-		fmt.Printf("Failed to start agent: %v\n", err)
-	}
-
-	go m.UpdateMetrics()
-	go m.SendMetricsAndCCLLogsToServer()
-	fmt.Println("Monitor started.")
-}
-
-func (m *Monitor) Stop() {
-	// Stop the agent
-	if err := m.stopAgent(); err != nil {
-		fmt.Printf("Failed to stop agent: %v\n", err)
-	}
-
-	close(m.stopEvent)
-	fmt.Println("Monitor stopped.")
-}
-
-// --- Gin Handlers ---
-
-func (m *Monitor) updateLatencyWindow(remoteRank int, latency float64) float64 {
+	// Clear latency data
 	m.latencyMutex.Lock()
-	defer m.latencyMutex.Unlock()
+	m.latencyWindow = make(map[int][]float64)
+	m.latencyMutex.Unlock()
 
-	if _, exists := m.latencyWindow[remoteRank]; !exists {
-		m.latencyWindow[remoteRank] = make([]float64, 0, m.windowSize)
+	// Prepare new environment variables
+	envVars := map[string]string{
+		"RANK":        fmt.Sprintf("%d", config.NewRank),
+		"WORLD_SIZE":  fmt.Sprintf("%d", config.WorldSize),
+		"MASTER_ADDR": os.Getenv("MASTER_ADDR"),
+		"MASTER_PORT": os.Getenv("MASTER_PORT"),
 	}
 
-	// Add new latency
-	m.latencyWindow[remoteRank] = append(m.latencyWindow[remoteRank], latency)
-
-	// Keep window size fixed
-	if len(m.latencyWindow[remoteRank]) > m.windowSize {
-		m.latencyWindow[remoteRank] = m.latencyWindow[remoteRank][1:]
+	// Stop current process
+	if err := m.stopAgent(); err != nil {
+		fmt.Printf("Warning: failed to stop agent: %v\n", err)
 	}
 
-	// Calculate average
-	var sum float64
-	for _, l := range m.latencyWindow[remoteRank] {
-		sum += l
-	}
-	return sum / float64(len(m.latencyWindow[remoteRank]))
-}
-
-func (m *Monitor) handleLogCCL(c *gin.Context) {
-	var incomingLog CCLLog
-	if err := c.ShouldBindJSON(&incomingLog); err != nil {
-		fmt.Printf("Error binding JSON: %v\n", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid data: %v", err)})
+	// Start with new configuration
+	if err := m.startAgent(envVars); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to restart agent: %v", err)})
 		return
 	}
 
-	// Only process completed P2P operations
-	if incomingLog.Finished && (incomingLog.OpType == "send" || incomingLog.OpType == "recv") {
-		latency := float64(incomingLog.EndTime-incomingLog.StartTime) / 1000000 // Convert to ms
-		m.updateLatencyWindow(int(incomingLog.RemoteRank), latency)
-	}
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Configuration updated and agent restarted",
+		"rank":    config.NewRank,
+	})
+}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Log processed"})
+func (m *Monitor) handleMetrics(c *gin.Context) {
+	m.latencyMutex.RLock()
+	avgLatencies := make(map[int]float64)
+	for rank, window := range m.latencyWindow {
+		if len(window) > 0 {
+			var sum float64
+			for _, l := range window {
+				sum += l
+			}
+			avgLatencies[rank] = sum / float64(len(window))
+		}
+	}
+	m.latencyMutex.RUnlock()
+
+	m.completionMutex.RLock()
+	isCompleted := m.isCompleted
+	m.completionMutex.RUnlock()
+
+	c.JSON(http.StatusOK, gin.H{
+		"rank":       m.rank,
+		"world_size": m.worldSize,
+		"ram_usage":  m.ramUsage,
+		"cpu_usage":  m.cpuUsage,
+		"latencies":  avgLatencies,
+		"completed":  isCompleted,
+	})
 }
 
 func (m *Monitor) handleActivate(c *gin.Context) {
+	m.rankMutex.Lock()
+	wasStandby := m.isStandby
 	m.isStandby = false
-	m.nodeStatus = "active"
-	m.Start()
+	m.rankMutex.Unlock()
+
+	if wasStandby {
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_, err := m.grpcClient.Register(ctx, &c4d.RegisterRequest{
+			NodeId:     m.nodeID,
+			NodeUrl:    m.nodeURL,
+			NodeStatus: "active",
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to register as active"})
+			return
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "Node activated"})
 }
 
 func (m *Monitor) handleRemove(c *gin.Context) {
-	m.Stop()
+	m.rankMutex.Lock()
 	m.isStandby = true
-	m.nodeStatus = "standby"
+	m.rankMutex.Unlock()
+
+	m.latencyMutex.Lock()
+	m.latencyWindow = make(map[int][]float64)
+	m.latencyMutex.Unlock()
+
+	close(m.stopChan)
 	c.JSON(http.StatusOK, gin.H{"message": "Node removed"})
 }
 
-func (m *Monitor) handleMetrics(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"ram_usage":             m.ramUsage,
-		"cpu_usage":             m.cpuUsage,
-		"compute_engine_status": m.computeEngineStatus,
-		"agent_metrics":         m.agentMetrics,
-		"agent_status":          m.agentStatus,
+func (m *Monitor) Start() error {
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	nodeStatus := "active"
+	if m.isStandby {
+		nodeStatus = "standby"
+	}
+	_, err := m.grpcClient.Register(ctx, &c4d.RegisterRequest{
+		NodeId:     m.nodeID,
+		NodeUrl:    m.nodeURL,
+		NodeStatus: nodeStatus,
 	})
+
+	if err != nil {
+		return fmt.Errorf("failed to register: %v", err)
+	}
+
+	if !m.isStandby {
+		go m.sendMetrics()
+	}
+
+	return nil
 }
 
-func (m *Monitor) GetCurrentRank() int {
-	m.rankMutex.RLock()
-	defer m.rankMutex.RUnlock()
-	return m.rank
+func (m *Monitor) Stop() {
+	close(m.stopChan)
 }
-
-func (m *Monitor) GetWorldSize() int {
-	m.rankMutex.RLock()
-	defer m.rankMutex.RUnlock()
-	return m.worldSize
-}
-
-func (m *Monitor) GetNodeInfo(nodeID string) (NodeInfo, bool) {
-	m.rankMutex.RLock()
-	defer m.rankMutex.RUnlock()
-	info, exists := m.activeNodes[nodeID]
-	return info, exists
-}
-
-// --- Main Function ---
 
 func main() {
 	monitor, err := NewMonitor()
@@ -614,32 +548,34 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Register with server
-	if err := monitor.RegisterWithServer(); err != nil {
-		fmt.Printf("Failed to register with server: %v\n", err)
+	if err := monitor.Start(); err != nil {
+		fmt.Printf("Failed to start monitor: %v\n", err)
 		os.Exit(1)
-	}
-
-	if !monitor.isStandby {
-		monitor.Start()
 	}
 
 	r := gin.Default()
 	r.POST("/log_ccl", monitor.handleLogCCL)
+	r.POST("/restart", monitor.handleRestart)
 	r.POST("/activate", monitor.handleActivate)
 	r.POST("/remove", monitor.handleRemove)
 	r.GET("/metrics", monitor.handleMetrics)
-	r.POST("/restart", monitor.handleRestart)
 
-	// Shutdown handler
+	port := os.Getenv("PORT")
+	// if port not set, default to 8081
+	if port == "" {
+		port = "8081"
+	}
+
 	go func() {
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
-		<-sig
-		fmt.Println("Shutting down monitor...")
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		<-sigCh
 		monitor.Stop()
 		os.Exit(0)
 	}()
 
-	r.Run(":8081")
+	if err := r.Run(":" + port); err != nil {
+		fmt.Printf("Server failed: %v\n", err)
+		os.Exit(1)
+	}
 }

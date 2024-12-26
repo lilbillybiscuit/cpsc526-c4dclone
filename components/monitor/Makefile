@@ -27,7 +27,7 @@ proto:
 		*.proto
 
 
-build: proto
+build:
 	@echo "Building Go project..."
 	@mkdir -p $(BIN_DIR)
 	@$(GO) build -o $(BIN_DIR)/$(BIN_NAME) .
