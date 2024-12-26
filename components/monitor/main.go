@@ -23,9 +23,11 @@ import (
 )
 
 const (
-	serverBaseURL           = "localhost:8091"
-	windowSize              = 100 // Size of latency sliding window
-	completionCheckInterval = 5 * time.Second
+	serverBaseURL                         = "localhost:8091"
+	windowSize                            = 100 // Size of latency sliding window
+	completionCheckInterval               = 5 * time.Second
+	maxRetries              int           = 10 // Maximum number of retries
+	initialBackoff          time.Duration = 2 * time.Second
 )
 
 type AgentStatus struct {
@@ -129,6 +131,7 @@ func NewMonitor() (*Monitor, error) {
 	nodeURL := fmt.Sprintf("http://%s.%s:%s", taskID, namespace, port)
 
 	var conn *grpc.ClientConn
+	var retries int = 0
 
 	for {
 		var err error
@@ -140,12 +143,17 @@ func NewMonitor() (*Monitor, error) {
 				PermitWithoutStream: true,
 			}))
 		if err != nil {
-			return nil, fmt.Errorf("failed to connect to server: %v", err)
+			retries++
+			if retries >= maxRetries {
+				return nil, fmt.Errorf("failed to connect to server after %d retries: %v", maxRetries, err)
+			}
+			fmt.Printf("Failed to connect to server: %v. Retrying in %d seconds...\n", err, initialBackoff.Seconds())
+			time.Sleep(initialBackoff)
+			//initialBackoff *= 2 // Exponential backoff
 		} else if conn != nil {
 			break
 		}
 	}
-
 	rank, _ := strconv.Atoi(os.Getenv("RANK"))
 	worldSize, _ := strconv.Atoi(os.Getenv("WORLD_SIZE"))
 
@@ -543,6 +551,8 @@ func (m *Monitor) Stop() {
 
 func main() {
 	monitor, err := NewMonitor()
+	gin.SetMode(gin.ReleaseMode)
+
 	if err != nil {
 		fmt.Printf("Failed to create monitor: %v\n", err)
 		os.Exit(1)
@@ -554,6 +564,19 @@ func main() {
 	}
 
 	r := gin.Default()
+	//r.Use(func(c *gin.Context) {
+	//	startTime := time.Now()
+	//	c.Next()
+	//	endTime := time.Now()
+	//
+	//	if c.Writer.Status() != http.StatusOK {
+	//		logMessage := fmt.Sprintf("[GIN] %s | %d | %v | %s | %s\n",
+	//			endTime.Format(time.RFC3339), c.Writer.Status(),
+	//			endTime.Sub(startTime),
+	//			c.ClientIP(), c.Request.Method, c.Request.URL.Path)
+	//		os.Stdout.Write([]byte(logMessage))
+	//	}
+	//})
 	r.POST("/log_ccl", monitor.handleLogCCL)
 	r.POST("/restart", monitor.handleRestart)
 	r.POST("/activate", monitor.handleActivate)

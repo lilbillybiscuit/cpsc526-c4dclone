@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	keepAliveInterval = 100 * time.Second
+	keepAliveInterval = 3 * time.Second
 	latencyThreshold  = 100 * time.Millisecond
 )
 
@@ -82,8 +82,8 @@ func (m *LatencyMatrix) UpdateLatency(fromRank, toRank int, latency float64) {
 
 	if fromRank >= 0 && fromRank < m.Size && toRank >= 0 && toRank < m.Size {
 		m.Data[fromRank][toRank] = latency
-		fmt.Printf("Matrix updated: [%d][%d] = %.2f (matrix size: %d)\n",
-			fromRank, toRank, latency, m.Size)
+		//fmt.Printf("Matrix updated: [%d][%d] = %.2f (matrix size: %d)\n",
+		//	fromRank, toRank, latency, m.Size)
 	} else {
 		fmt.Printf("Invalid rank indices: [%d][%d] for matrix size %d\n",
 			fromRank, toRank, m.Size)
@@ -455,6 +455,18 @@ func (s *C4DServer) Register(ctx context.Context, req *c4d.RegisterRequest) (*c4
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
+	// Check if the node is already registered and marked as failed
+	node := s.nodes[req.NodeId]
+	if node != nil && node.Status == "failed" {
+		fmt.Printf("Node %s is marked as failed. Reconnecting...\n", req.NodeId)
+		node.Status = "active"
+		node.LastHeartbeat = time.Now()
+		return &c4d.RegisterResponse{
+			Message: "Node reconnected successfully",
+			NodeId:  req.NodeId,
+		}, nil
+	}
+
 	// Check if we've exceeded expected nodes
 	totalNodes := len(s.nodes)
 	if totalNodes >= s.config.ExpectedNodes {
@@ -509,13 +521,17 @@ func (s *C4DServer) SendMetrics(ctx context.Context, req *c4d.MetricsRequest) (*
 		return nil, fmt.Errorf("unknown node: %s", req.NodeId)
 	}
 
+	// Check if the node is marked as failed
+	if node.Status == "failed" {
+		return nil, fmt.Errorf("node %s is marked as failed", req.NodeId)
+	}
+
 	// Ignore metrics from standby nodes
 	if node.Status == "standby" {
-		//fmt.Printf("Ignoring metrics from standby node %s\n", req.NodeId)
 		return &c4d.MetricsResponse{Message: "Standby node metrics ignored"}, nil
 	}
 
-	// Update node state
+	// Update node state with the current timestamp
 	node.LastHeartbeat = time.Now()
 	node.SystemMetrics.CPUUsage = req.Metrics.CpuUsage
 	node.SystemMetrics.MemoryUsage = req.Metrics.RamUsage
@@ -529,20 +545,10 @@ func (s *C4DServer) SendMetrics(ctx context.Context, req *c4d.MetricsRequest) (*
 		node.ProcessID = req.Status.ProcessId
 	}
 
-	// Debug print node ranks
-	fmt.Printf("\nCurrent node ranks:\n")
-	for nID, state := range s.nodes {
-		if state.Status == "active" {
-			fmt.Printf("Node %s: Rank %d\n", nID, state.Rank)
-		}
-	}
-
 	// Update latency matrix with more detailed logging
 	if req.Metrics.RankLatencies != nil {
 		senderRank := node.Rank
-		fmt.Printf("\nUpdating latency matrix from sender rank %d:\n", senderRank)
 		for remoteRank, avgLatency := range req.Metrics.RankLatencies.AvgLatencies {
-			fmt.Printf("Updating latency: [%d][%d] = %.2f\n", senderRank, remoteRank, avgLatency)
 			s.latencyMatrix.UpdateLatency(senderRank, int(remoteRank), avgLatency)
 		}
 	}
