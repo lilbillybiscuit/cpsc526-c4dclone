@@ -171,18 +171,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	C4DService_Register_FullMethodName    = "/c4d.C4DService/Register"
-	C4DService_SendMetrics_FullMethodName = "/c4d.C4DService/SendMetrics"
+	C4DService_Register_FullMethodName      = "/c4d.C4DService/Register"
+	C4DService_SendMetrics_FullMethodName   = "/c4d.C4DService/SendMetrics"
+	C4DService_SendHeartbeat_FullMethodName = "/c4d.C4DService/SendHeartbeat"
+	C4DService_NotifyFailure_FullMethodName = "/c4d.C4DService/NotifyFailure"
 )
 
 // C4DServiceClient is the client API for C4DService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// Service definition
 type C4DServiceClient interface {
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	SendMetrics(ctx context.Context, in *MetricsRequest, opts ...grpc.CallOption) (*MetricsResponse, error)
+	SendHeartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
+	NotifyFailure(ctx context.Context, in *FailureNotificationRequest, opts ...grpc.CallOption) (*FailureNotificationResponse, error)
 }
 
 type c4DServiceClient struct {
@@ -213,14 +215,34 @@ func (c *c4DServiceClient) SendMetrics(ctx context.Context, in *MetricsRequest, 
 	return out, nil
 }
 
+func (c *c4DServiceClient) SendHeartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HeartbeatResponse)
+	err := c.cc.Invoke(ctx, C4DService_SendHeartbeat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *c4DServiceClient) NotifyFailure(ctx context.Context, in *FailureNotificationRequest, opts ...grpc.CallOption) (*FailureNotificationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FailureNotificationResponse)
+	err := c.cc.Invoke(ctx, C4DService_NotifyFailure_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // C4DServiceServer is the server API for C4DService service.
 // All implementations must embed UnimplementedC4DServiceServer
 // for forward compatibility.
-//
-// Service definition
 type C4DServiceServer interface {
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	SendMetrics(context.Context, *MetricsRequest) (*MetricsResponse, error)
+	SendHeartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
+	NotifyFailure(context.Context, *FailureNotificationRequest) (*FailureNotificationResponse, error)
 	mustEmbedUnimplementedC4DServiceServer()
 }
 
@@ -236,6 +258,12 @@ func (UnimplementedC4DServiceServer) Register(context.Context, *RegisterRequest)
 }
 func (UnimplementedC4DServiceServer) SendMetrics(context.Context, *MetricsRequest) (*MetricsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SendMetrics not implemented")
+}
+func (UnimplementedC4DServiceServer) SendHeartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SendHeartbeat not implemented")
+}
+func (UnimplementedC4DServiceServer) NotifyFailure(context.Context, *FailureNotificationRequest) (*FailureNotificationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NotifyFailure not implemented")
 }
 func (UnimplementedC4DServiceServer) mustEmbedUnimplementedC4DServiceServer() {}
 func (UnimplementedC4DServiceServer) testEmbeddedByValue()                    {}
@@ -294,6 +322,42 @@ func _C4DService_SendMetrics_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _C4DService_SendHeartbeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HeartbeatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(C4DServiceServer).SendHeartbeat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: C4DService_SendHeartbeat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(C4DServiceServer).SendHeartbeat(ctx, req.(*HeartbeatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _C4DService_NotifyFailure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FailureNotificationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(C4DServiceServer).NotifyFailure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: C4DService_NotifyFailure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(C4DServiceServer).NotifyFailure(ctx, req.(*FailureNotificationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // C4DService_ServiceDesc is the grpc.ServiceDesc for C4DService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -308,6 +372,14 @@ var C4DService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendMetrics",
 			Handler:    _C4DService_SendMetrics_Handler,
+		},
+		{
+			MethodName: "SendHeartbeat",
+			Handler:    _C4DService_SendHeartbeat_Handler,
+		},
+		{
+			MethodName: "NotifyFailure",
+			Handler:    _C4DService_NotifyFailure_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

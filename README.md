@@ -36,6 +36,8 @@ Jewon Im contributed to the implementation of the monitoring agent and server, f
 
 First, build the pytorch-c4d image. There is an ARM64 image currently on Docker hub, but it is recommended to build the image locally to ensure compatibility.
 
+Next, set up a kubernetes cluster using any service (we set up our own using EC2 instances) with some shared network file system between physical hosts (we used EFS).
+
 Then, install kubectl, and install the Pytorch training operator:
 ```
 kubectl apply --server-side -k "github.com/kubeflow/training-operator.git/manifests/overlays/standalone?ref=v1.8.1"

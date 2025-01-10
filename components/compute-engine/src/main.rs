@@ -441,6 +441,18 @@ async fn stop_script_advanced(data: web::Data<AppState>) -> impl Responder {
     }
 }
 
+async fn get_env(data: web::Data<AppState>) -> impl Responder {
+    let process_guard = data.script_process.lock().unwrap();
+    if let Some(child) = &*process_guard {
+        let env_vars = child.env().unwrap_or_default();
+        HttpResponse::Ok().json(env_vars)
+    } else {
+        HttpResponse::BadRequest().json(ErrorResponse {
+            error: "No process running".to_string(),
+        })
+    }
+}
+
 async fn restart_script(
     data: web::Data<AppState>,
     params: web::Json<ScriptParams>,
@@ -456,9 +468,9 @@ async fn main() -> std::io::Result<()> {
         last_execution: Mutex::new(None),
     });
 
-    println!("Starting server at http://0.0.0.0:8080");
-    let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
 
+    let port = env::var("AGENT_PORT").unwrap_or_else(|_| "8090".to_string());
+    println!("Starting server at http://0.0.0.0:{}", port);
     let app_state_clone = app_state.clone();
     let server = HttpServer::new(move || {
         App::new()
@@ -468,15 +480,16 @@ async fn main() -> std::io::Result<()> {
             .route("/status", web::get().to(get_status))
             .route("/metrics", web::get().to(get_metrics))
             .route("/restart", web::post().to(restart_script))
+            .route("/env", web::get().to(get_env))
     })
         .bind(format!("0.0.0.0:{}", port))?
         .run();
 
-    start_script(app_state_clone, web::Json(ScriptParams {
-        env_vars: None,
-        script_path: None
-    }))
-        .await;
+    // start_script(app_state_clone, web::Json(ScriptParams {
+    //     env_vars: None,
+    //     script_path: None
+    // }))
+    //     .await;
 
     server.await
 }

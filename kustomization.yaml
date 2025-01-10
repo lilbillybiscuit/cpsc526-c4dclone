@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- deploy/c4d-server/service.yaml
+- deploy/central-node/deployment.yaml
+- deploy/compute-node/service.yaml
+- deploy/compute-node/statefulset.yaml
+- deploy/compute-pod/pod.yaml
+- deploy/compute-pod/service.yaml
+- deploy/failure-server/service.yaml
+- deploy/shared-storage/pv.yaml
+- deploy/shared-storage/pvc.yaml
+- deploy/task-distributor/service.yaml

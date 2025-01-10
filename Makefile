@@ -39,7 +39,10 @@ build-compute:
 
 .PHONY: build-c4d
 build-c4d:
+    # copy components/c4d-server/proto symlink to components/c4d-server/proto2 to avoid docker build error
+	cp -r components/c4d-server/proto components/c4d-server/proto2
 	$(DOCKER) build -t $(DOCKER_REGISTRY)/c4d-server:$(C4D_AGENT_TAG) -t c4d-server:$(C4D_AGENT_TAG) components/c4d-server
+	rm -rf components/c4d-server/proto2
 
 .PHONY: build-failure
 build-failure:

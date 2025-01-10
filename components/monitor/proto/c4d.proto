@@ -162,6 +162,7 @@ message NodeStatus {
   int64 process_id = 2;
   int32 exit_code = 3;
   bool completed_successfully = 4;
+  string error = 5;
 }
 
 // Latency information between ranks
@@ -182,6 +183,8 @@ message RegisterRequest {
   string node_id = 1;
   string node_url = 2;
   string node_status = 3;  // "active" or "standby"
+  string master_addr = 4;
+  string master_port = 5;
 }
 
 message RegisterResponse {
@@ -193,15 +196,44 @@ message RegisterResponse {
 message MetricsRequest {
   string node_id = 1;
   Metrics metrics = 2;
-  NodeStatus status = 3;
+//  NodeStatus status = 3;
+//  bool heartbeat = 4;
 }
 
 message MetricsResponse {
   string message = 1;
 }
 
-// Service definition
+message HeartbeatRequest {
+  string node_id = 1;
+  string status = 2;  // "active" or "standby"
+  int64 timestamp = 3;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  string message = 2;
+}
+
+message FailureNotificationRequest {
+  string node_id = 1;
+  string error_message = 2;
+  int64 timestamp = 3;
+  int64 process_id = 4;
+  string failure_type = 5;  // "process_crash", "connection_lost", etc.
+}
+
+message FailureNotificationResponse {
+  bool acknowledged = 1;
+  string message = 2;
+}
+
+
 service C4DService {
   rpc Register(RegisterRequest) returns (RegisterResponse) {}
   rpc SendMetrics(MetricsRequest) returns (MetricsResponse) {}
+  rpc SendHeartbeat(HeartbeatRequest) returns (HeartbeatResponse) {}
+  rpc NotifyFailure(FailureNotificationRequest) returns (FailureNotificationResponse) {}
+
 }
+
